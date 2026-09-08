@@ -7,10 +7,10 @@ Moderator reviews applicants directly, while several Junior Moderators consult s
 The system is split into 8 microservices, each owning a distinct piece of the game's state — see the boundaries and diagram below.
 
 ## Team 17
-- Anastasia Tiganescu, FAF-231 — [Service(s) owned]
-- Catalin Darzu, FAF-231  — [Service(s) owned]
-- Daniela Cojocari, FAF-231  — [Service(s) owned]
-- Janeta Grigoras, FAF-231  — [Service(s) owned]
+- Anastasia Tiganescu, FAF-231 — Server Rules + University Record Services
+- Catalin Darzu, FAF-231  — Applicant and Credential Services
+- Daniela Cojocari, FAF-231  — Moderation + Discord DMS Services
+- Janeta Grigoras, FAF-231  — Player + Server Moderation Session Services
 
 ---
 
