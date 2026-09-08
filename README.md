@@ -146,3 +146,78 @@ Consistency is eventual — fine, since an applicant is shown only after the ses
 | Errors | `{ "error": { "code": "STRING_CODE", "message": "human text" } }` |
 | JSON | `snake_case` |
 | Paths | plural — `/applicants/{applicant_id}` |
+
+---
+
+## GitHub Workflow
+
+### Branches
+
+| Branch | Role |
+|---|---|
+| `main` | Presented state. Only ever receives merges from `dev`. Tagged per lab. |
+| `dev` | Integration branch. All feature work merges here first. |
+| feature branches | Short-lived, one per task, deleted after merge. |
+
+Both `main` and `dev` are protected: no direct pushes, pull request required.
+
+### Branch naming
+
+```
+feat/<service>-<slug>     feat/credential-document-validation
+fix/<service>-<slug>      fix/applicant-duplicate-events
+docs/<slug>               docs/github-workflow
+chore/<slug>              chore/submodules-anastasia
+```
+
+Lowercase, hyphen-separated, `<service>` matches the directory under `services/`.
+
+### Merging
+
+- feature branch → `dev`: **squash merge**, so `dev` keeps one commit per task
+- `dev` → `main`: **merge commit**, so the integration history is preserved
+- **1 approval required** — a team of four stalls on two
+- The branch is deleted after merge
+
+Rebase on `dev` before opening a PR; do not merge `dev` into your feature branch.
+
+### Commit messages
+
+One capitalised imperative sentence, no prefix, no body.
+
+```
+Create README.md with service boundaries
+Link Applicant and Credential services as submodules
+```
+
+### Pull request contents
+
+Every PR states:
+
+1. **What** changed
+2. **Why** — the task or decision behind it
+3. **How it was tested** — commands run, or "docs only"
+4. **Linked task** from the project board
+
+A PR touching a service someone else owns needs that owner's approval, not just any.
+
+### Test coverage
+
+No code exists yet, so nothing is enforced at Lab 0. From Lab 1:
+
+- unit tests for business logic — validation rules, rule evaluation, deception generation
+- integration tests for every endpoint listed in the communication contract
+- target **60% line coverage** per service; a PR that lowers coverage explains why
+- the test command runs in the service's Dockerfile build, so a broken test fails the image
+
+### Versioning
+
+Semantic versioning, tagged on `main` after each lab is presented:
+
+```
+v0.1.0   Lab 0 — planning and contract
+v0.2.0   Lab 1 — first running services
+```
+
+Service repositories are tagged independently once they publish images; the CPR tag records
+which submodule commits made up a presented state.

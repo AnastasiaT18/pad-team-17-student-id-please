@@ -1,0 +1,20 @@
+# env & secrets
+.env
+.env.*
+*.pem
+
+# java
+target/
+build/
+*.class
+.gradle/
+
+# node
+node_modules/
+dist/
+npm-debug.log*
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
