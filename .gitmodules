@@ -1,0 +1,6 @@
+[submodule "services/applicant-service"]
+	path = services/applicant-service
+	url = https://github.com/Darzu-Catalin/pad-team-17-applicant-service
+[submodule "services/credential-service"]
+	path = services/credential-service
+	url = https://github.com/Darzu-Catalin/pad-team-17-credential-service
