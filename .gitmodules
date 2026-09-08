@@ -4,3 +4,9 @@
 [submodule "services/credential-service"]
 	path = services/credential-service
 	url = https://github.com/Darzu-Catalin/pad-team-17-credential-service
+[submodule "services/server-rules-service"]
+	path = services/server-rules-service
+	url = https://github.com/AnastasiaT18/pad-team-17-server-rules-service
+[submodule "services/university-record-service"]
+	path = services/university-record-service
+	url = https://github.com/AnastasiaT18/pad-team-17-university-record-service
