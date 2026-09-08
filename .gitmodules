@@ -10,3 +10,9 @@
 [submodule "services/university-record-service"]
 	path = services/university-record-service
 	url = https://github.com/AnastasiaT18/pad-team-17-university-record-service
+[submodule "services/moderation-service"]
+	path = services/moderation-service
+	url = https://github.com/DannaCojocari/moderation-service
+[submodule "services/discord-dms-service"]
+	path = services/discord-dms-service
+	url = https://github.com/DannaCojocari/discord-dms-service
