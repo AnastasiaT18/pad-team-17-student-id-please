@@ -1,6 +1,0 @@
-[submodule "services/rules"]
-	path = services/rules
-	url = https://github.com/Darzu-Catalin/PAD_Server_Rules_Service
-[submodule "services/records"]
-	path = services/records
-	url = https://github.com/Darzu-Catalin/PAD_University_Record_Service
