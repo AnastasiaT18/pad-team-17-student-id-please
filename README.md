@@ -70,4 +70,16 @@ the current session.
 
 ## Architecture Diagram
 
-![Architecture diagram](architecture-diagram.svg)
+![Architecture diagram](architecture_diagram.svg)
+
+Arrows point from the service that initiates a call to the service it calls.
+
+Applicant Service is the designated entry point for new applicants — it initializes 
+a new applicant's profile and propagates it to Credential Service and University 
+Record Service. Per the spec, any of these three services could technically be 
+the first contacted; our team has fixed Applicant Service as that entry point for 
+consistency.
+
+Moderation Service is the only service that reaches into the applicant-data cluster 
+after an applicant already exists — it queries Applicant, Credential, and University 
+Record Services to gather what it needs before checking the decision against Server Rules.
