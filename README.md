@@ -125,14 +125,14 @@ Trade-off: heavier services and slower startup — acceptable, since nothing her
 | Client → system | REST + JSON via API gateway | Discrete actions (login, join shift, query record, submit verdict). One place to check the JWT. |
 | Client → Discord DMs | WebSocket (Socket.IO) | Chat must be pushed, not polled. |
 | Service → service, needs an answer | gRPC | Moderation makes 4 calls (Applicant, Credential, Record, Rules) before answering. The `.proto` is one contract both languages generate from, so Java and TS can't drift. |
-| Service → service, fire and forget | RabbitMQ events | `ApplicantCreated`, `DecisionMade`, `ShiftEnded`. Publisher doesn't wait; a consumer being down doesn't fail the shift. |
+| Service → service, fire and forget | RabbitMQ events | `applicant_initialized`, `decision_made`, `shift_ended`. Publisher doesn't wait; a consumer being down doesn't fail the shift. |
 
 ### Data management
 
 One database per service. No service reads another's tables — only its API or its events.
 
 Applicant, Credential and University Record hold the same applicant in three databases.
-Applicant Service publishes `ApplicantCreated`; the other two build documents and ground truth
+Applicant Service publishes `applicant_initialized`; the other two build documents and ground truth
 from it. Consumers are idempotent on `applicant_id`, so a redelivery can't duplicate data.
 Consistency is eventual — fine, since an applicant is shown only after the session advances to them.
 
@@ -148,6 +148,650 @@ Consistency is eventual — fine, since an applicant is shown only after the ses
 | Paths | plural — `/applicants/{applicant_id}` |
 
 ---
+## Communication Contract
+
+Data lives in one database per service. Services never touch each other's tables, only their APIs and events, as described above.
+
+### Player Service
+
+**Client-facing REST (via API Gateway)**
+
+`POST /players` - register a new player account
+```json
+// Request
+{ "username": "string", "email": "string", "password": "string" }
+
+// Response 201
+{ "player_id": "uuid", "username": "string", "email": "string", "xp": 0, "level": 1, "created_at": "RFC3339" }
+```
+
+`POST /players/login` - authenticate
+```json
+// Request
+{ "email": "string", "password": "string" }
+
+// Response 200
+{ "player_id": "uuid", "token": "jwt string" }
+```
+
+`GET /players/{player_id}` - fetch profile
+```json
+// Response 200
+{
+  "player_id": "uuid",
+  "username": "string",
+  "xp": 0,
+  "level": 1,
+  "friends": ["uuid"],
+  "shifts_completed": 0,
+  "disciplinary_actions": 0
+}
+```
+
+`PATCH /players/{player_id}` - update profile fields
+```json
+// Request (any subset)
+{ "username": "string", "email": "string" }
+
+// Response 200
+{
+  "player_id": "uuid",
+  "username": "string",
+  "xp": 0,
+  "level": 1,
+  "friends": ["uuid"],
+  "shifts_completed": 0,
+  "disciplinary_actions": 0
+}
+```
+
+`GET /players/{player_id}/friends` - list a player's friends
+```json
+// Response 200
+{ "friends": [ { "player_id": "uuid", "username": "string" } ] }
+```
+
+`POST /players/{player_id}/friends` - add another player as a friend
+```json
+// Request
+{ "friend_id": "uuid" }
+
+// Response 200
+{ "friends": [ { "player_id": "uuid", "username": "string" } ] }
+```
+
+**Events consumed (RabbitMQ)**
+
+`shift_ended` - published by Session Service when a shift ends.
+```json
+{
+  "session_id": "uuid",
+  "results": [
+    { "player_id": "uuid", "xp_gained": 0, "shift_completed": true, "disciplinary_action": false }
+  ]
+}
+```
+Applied per `player_id` to update `xp`, `level`, `shifts_completed`, `disciplinary_actions`.
+Idempotent on `(session_id, player_id)`.
+
+---
+
+### Server Moderation Session Service
+
+**Client-facing REST (via API Gateway)**
+
+`POST /sessions` - create a session
+```json
+// Response 201
+{ "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
+```
+
+`POST /sessions/{session_id}/join` - a player joins an existing, not-yet-started session as Junior Moderator
+```json
+// Request
+{ "player_id": "uuid" }
+
+// Response 200
+{ "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
+```
+
+`POST /sessions/{session_id}/start` - mark the session active, start the shift, and assign each Junior Moderator the record scope(s) they'll have access to for the whole shift (via
+`UniversityRecordService.AssignScopes`, below).
+```json
+// Response 200
+{ "session_id": "uuid", "status": "active", "started_at": "RFC3339" }
+```
+
+`GET /sessions/{session_id}` - full state
+```json
+// Response 200
+{
+  "session_id": "uuid",
+  "status": "created | active | ended",
+  "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] },
+  "current_applicant_id": "uuid | null",
+  "processed_count": 0,
+  "score": 0,
+  "started_at": "RFC3339 | null",
+  "ended_at": "RFC3339 | null"
+}
+```
+
+`GET /sessions/{session_id}/current-applicant` - the applicant currently under review
+```json
+// Response 200
+{ "applicant_id": "uuid | null", "processed_count": 0 }
+```
+
+`POST /sessions/{session_id}/end` - end the shift and finalize results
+```json
+// Response 200
+{
+  "session_id": "uuid",
+  "status": "ended",
+  "final_score": 0,
+  "results": [ { "player_id": "uuid", "xp_gained": 0, "shift_completed": true, "disciplinary_action": false } ]
+}
+```
+Triggers publishing `shift_ended` (below).
+
+**Outgoing gRPC calls (needs an answer)**
+
+`ApplicantService.GetNextApplicant`
+```proto
+rpc GetNextApplicant (NextApplicantRequest) returns (NextApplicantResponse);
+message NextApplicantRequest { string session_id = 1; }
+message NextApplicantResponse { string applicant_id = 1; }
+```
+
+`DiscordDmsService.ProvisionChannels`
+```proto
+rpc ProvisionChannels (ProvisionChannelsRequest) returns (ProvisionChannelsResponse);
+message ProvisionChannelsRequest {
+  string session_id = 1;
+  repeated string participant_ids = 2;
+}
+message ProvisionChannelsResponse { repeated Channel channels = 1; }
+message Channel { string channel_id = 1; string name = 2; }
+```
+
+`UniversityRecordService.AssignScopes`
+```proto
+rpc AssignScopes (AssignScopesRequest) returns (AssignScopesResponse);
+message AssignScopesRequest {
+  string session_id = 1;
+  repeated PlayerScopeAssignment assignments = 2;
+}
+message PlayerScopeAssignment {
+  string player_id = 1;
+  repeated string scopes = 2; // enrollment | courses | schedule | messages
+}
+message AssignScopesResponse { bool success = 1; }
+```
+
+**Events published (RabbitMQ)**
+
+`shift_ended` - published when a shift ends.
+```json
+{
+  "session_id": "uuid",
+  "results": [
+    { "player_id": "uuid", "xp_gained": 0, "shift_completed": true, "disciplinary_action": false }
+  ]
+}
+```
+
+**Events consumed (RabbitMQ)**
+
+`decision_made` - published by Moderation Service after each verdict.
+```json
+{
+  "session_id": "uuid",
+  "applicant_id": "uuid",
+  "verdict": "accept | reject | flag | ban",
+  "correct": true,
+  "penalty": 0
+}
+```
+Applied to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next
+`GetNextApplicant` call.
+
+### Applicant Service
+
+**Client-facing REST (via API Gateway)**
+
+`POST /applicants` - generate a new applicant profile for a moderation session
+```json
+// Request
+{ "session_id": "uuid" }
+
+// Response 201
+{
+  "applicant_id": "uuid",
+  "name": "string",
+  "student_id": "string",
+  "major": "string",
+  "year": 0,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+```
+`is_deceptive` is stored internally but is never returned in any player-facing response — it's the
+ground-truth answer the game is built around, so exposing it here would let a player just read
+the answer instead of investigating for it.
+
+
+`GET /applicants/{applicant_id}` - fetch an applicant's profile
+```json
+// Response 200
+{
+  "applicant_id": "uuid",
+  "name": "string",
+  "student_id": "string",
+  "major": "string",
+  "year": 0,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+```
+
+**Events published (RabbitMQ)**
+
+`applicant_initialized` - published when Applicant Service is contacted first for a new applicant.
+```json
+{
+  "applicant_id": "uuid",
+  "name": "string",
+  "student_id": "string",
+  "major": "string",
+  "year": 0,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+```
+Consumed by Credential Service and University Record Service to build their own documents/records
+for this applicant, so all three stay in sync.
+
+**Events consumed (RabbitMQ)**
+
+`credential_initialized` - published by Credential Service when it's contacted first instead.
+```json
+{
+  "applicant_id": "uuid",
+  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "university_email": "string",
+  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "course_registration": ["string"]
+}
+```
+
+`record_initialized` - published by University Record Service when it's contacted first instead.
+```json
+{
+  "applicant_id": "uuid",
+  "enrollment_status": "string",
+  "academic_year": 0,
+  "courses": ["string"]
+}
+```
+
+Applicant Service builds its profile from whichever of these arrives, if it wasn't the one that
+initialized the applicant itself. Idempotent on `applicant_id`, an applicant is only initialized once.
+
+---
+
+### Credential Service
+
+**Client-facing REST (via API Gateway)**
+
+`POST /credentials` - generate credentials for a new applicant
+```json
+// Request
+{ "applicant_id": "uuid" }
+
+// Response 201
+{
+  "applicant_id": "uuid",
+  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "university_email": "string",
+  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "course_registration": ["string"]
+}
+```
+
+`GET /credentials/{applicant_id}` - fetch an applicant's credentials and their validity
+```json
+// Response 200
+{
+  "applicant_id": "uuid",
+  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "university_email": "string",
+  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "course_registration": ["string"]
+}
+```
+
+**Events published (RabbitMQ)**
+
+`credential_initialized` - published when Credential Service is the first to be contacted for a new applicant.
+```json
+{
+  "applicant_id": "uuid",
+  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "university_email": "string",
+  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "course_registration": ["string"]
+}
+```
+Consumed by Applicant Service and University Record Service to build their own data for this
+applicant.
+
+**Events consumed (RabbitMQ)**
+
+`applicant_initialized` - published by Applicant Service when it's contacted first instead.
+```json
+{
+  "applicant_id": "uuid",
+  "name": "string",
+  "student_id": "string",
+  "major": "string",
+  "year": 0,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+```
+
+`record_initialized` - published by University Record Service when it's contacted first instead.
+```json
+{
+  "applicant_id": "uuid",
+  "enrollment_status": "string",
+  "academic_year": 0,
+  "courses": ["string"]
+}
+```
+Credential Service builds its documents from whichever event arrives, if it wasn't the one that
+initialized the applicant itself. Idempotent on `applicant_id`.
+
+---
+### Server Rules Service
+
+Holds no applicant data — evaluates whatever it's handed, per request.
+
+**Client-facing REST (via API Gateway)**
+
+`GET /rules` - fetch the current active rule set
+```json
+// Response 200
+{
+  "rules": [
+    { "rule_id": "uuid", "description": "string", "condition": "string" }
+  ]
+}
+```
+
+`PUT /rules` - replace the active rule set (Moderator only, between shifts)
+```json
+// Request
+{
+  "rules": [
+    { "description": "string", "condition": "string" }
+  ]
+}
+
+// Response 200
+{
+  "rules": [
+    { "rule_id": "uuid", "description": "string", "condition": "string" }
+  ]
+}
+```
+
+No events published or consumed — Server Rules Service doesn't participate in the applicant propagation pattern.
+
+---
+
+### University Record Service
+
+**Client-facing REST (via API Gateway)**
+
+`POST /records` - generate ground-truth records for a new applicant (used if University Record Service is contacted first)
+```json
+// Request
+{ "applicant_id": "uuid" }
+
+// Response 201
+{
+  "applicant_id": "uuid",
+  "enrollment_status": "string",
+  "academic_year": 0,
+  "courses": ["string"],
+  "previously_banned": false
+}
+```
+
+`GET /sessions/{session_id}/records/{applicant_id}` - fetch the records the calling player is assigned to see, for this applicant, in this session
+```json
+// Request
+// header: Authorization: Bearer <JWT>   (identifies the calling player)
+
+// Response 200
+{
+  "assigned_scopes": ["enrollment"],
+  "data": { "enrollment": { "enrollment_status": "string" } }
+}
+
+// Response 403 — player has no scope assignment for this session
+{ "error": { "code": "NOT_ASSIGNED_TO_SESSION", "message": "human text" } }
+```
+The service no longer trusts a client-supplied `scope` value. Instead it looks up which scope(s)
+the calling player (from the JWT) was assigned via `AssignScopes` — a gRPC call made by Server
+Moderation Session Service when the shift starts — and returns only that data. A player who
+wasn't in the session, or has no assignment, gets `403`. This is the actual enforcement point
+for the partitioning promised in Service Boundaries.
+
+**Incoming gRPC (called by Server Moderation Session Service at shift start)**
+
+`AssignScopes`
+```proto
+rpc AssignScopes (AssignScopesRequest) returns (AssignScopesResponse);
+message AssignScopesRequest {
+  string session_id = 1;
+  repeated PlayerScopeAssignment assignments = 2;
+}
+message PlayerScopeAssignment {
+  string player_id = 1;
+  repeated string scopes = 2; // enrollment | courses | schedule | messages
+}
+message AssignScopesResponse { bool success = 1; }
+```
+
+**Events published (RabbitMQ)**
+
+`record_initialized` - published when University Record Service is the first to be contacted for a new applicant.
+```json
+{
+  "applicant_id": "uuid",
+  "enrollment_status": "string",
+  "academic_year": 0,
+  "courses": ["string"],
+  "previously_banned": false
+}
+```
+Consumed by Applicant Service and Credential Service to build their own data for this applicant.
+
+**Events consumed (RabbitMQ)**
+
+`applicant_initialized` - published by Applicant Service when it's contacted first instead.
+```json
+{
+  "applicant_id": "uuid",
+  "name": "string",
+  "student_id": "string",
+  "major": "string",
+  "year": 0,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+```
+
+`credential_initialized` - published by Credential Service when it's contacted first instead.
+```json
+{
+  "applicant_id": "uuid",
+  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "university_email": "string",
+  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
+  "course_registration": ["string"]
+}
+```
+University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant itself. Idempotent on `applicant_id`.
+
+---
+
+### Moderation Service
+
+**Client-facing REST (via API Gateway)**
+
+`POST /sessions/{session_id}/applicants/{applicant_id}/decision` - submit a verdict for the current applicant
+```json
+// Request
+{ "verdict": "accept | reject | flag | ban" }
+
+// Response 200
+{
+  "applicant_id": "uuid",
+  "verdict": "accept | reject | flag | ban",
+  "correct": true,
+  "violated_rule_ids": ["uuid"],
+  "penalty": 0
+}
+```
+
+**Outgoing gRPC calls (needs an answer)**
+
+`ApplicantService.GetApplicant`
+```proto
+rpc GetApplicant (GetApplicantRequest) returns (Applicant);
+message GetApplicantRequest { string applicant_id = 1; }
+message Applicant {
+  string applicant_id = 1;
+  string name = 2;
+  string student_id = 3;
+  string major = 4;
+  int32 year = 5;
+  string university_status = 6;
+  repeated string courses = 7;
+  string role = 8;
+}
+```
+
+`CredentialService.GetCredentials`
+```proto
+rpc GetCredentials (GetCredentialsRequest) returns (Credentials);
+message GetCredentialsRequest { string applicant_id = 1; }
+message Credentials {
+  string applicant_id = 1;
+  DocumentStatus student_id_doc = 2;
+  string university_email = 3;
+  DocumentStatus enrollment_confirmation = 4;
+  repeated string course_registration = 5;
+}
+message DocumentStatus { bool valid = 1; string issue = 2; }
+```
+
+`UniversityRecordService.GetRecordSnapshot`
+```proto
+rpc GetRecordSnapshot (GetRecordSnapshotRequest) returns (RecordSnapshot);
+message GetRecordSnapshotRequest { string applicant_id = 1; }
+message RecordSnapshot {
+  string applicant_id = 1;
+  string enrollment_status = 2;
+  int32 academic_year = 3;
+  repeated string courses = 4;
+  bool previously_banned = 5;
+}
+```
+Unscoped — returns the full record regardless of player assignment, since this call is server-to-server, not client-facing.
+
+`ServerRulesService.EvaluateApplicant`
+```proto
+rpc EvaluateApplicant (EvaluateApplicantRequest) returns (EvaluateApplicantResponse);
+message EvaluateApplicantRequest {
+  string applicant_id = 1;
+  string university_status = 2;
+  int32 year = 3;
+  repeated string courses = 4;
+  bool credentials_valid = 5;
+  bool previously_banned = 6;
+}
+message EvaluateApplicantResponse {
+  bool allowed = 1;
+  repeated string violated_rule_ids = 2;
+}
+```
+`EvaluateApplicantRequest` is assembled by Moderation Service from the three responses above — Server Rules Service never fetches applicant data itself.
+
+**Events published (RabbitMQ)**
+
+`decision_made` - published after each verdict.
+```json
+{
+  "session_id": "uuid",
+  "applicant_id": "uuid",
+  "verdict": "accept | reject | flag | ban",
+  "correct": true,
+  "penalty": 0
+}
+```
+Consumed by Server Moderation Session Service to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next `GetNextApplicant` call.
+
+---
+
+### Discord DMs Service
+
+**Client-facing REST (via API Gateway)**
+
+`GET /sessions/{session_id}/channels` - list channels for a session and who can access each
+```json
+// Response 200
+{
+  "channels": [
+    { "channel_id": "uuid", "name": "string", "allowed_player_ids": ["uuid"] }
+  ]
+}
+```
+
+**WebSocket protocol (Socket.IO, connect with `Authorization: Bearer <JWT>`)**
+
+Client → server, `join_channel`
+```json
+{ "channel_id": "uuid" }
+```
+
+Client → server, `send_message`
+```json
+{ "channel_id": "uuid", "text": "string" }
+```
+
+Server → client, `message`
+```json
+{ "channel_id": "uuid", "author_id": "uuid", "text": "string", "sent_at": "RFC3339" }
+```
+
+Server → client, `error`
+```json
+{ "error": { "code": "CHANNEL_NOT_ALLOWED", "message": "human text" } }
+```
+
+Room membership is checked against `allowed_player_ids` (received from Session Service via `ProvisionChannels`) at `join_channel` time — a player never receives messages for a channel they weren't granted.
+
+No RabbitMQ events — the service only transports messages, it doesn't react to anything asynchronously.
 
 ## GitHub Workflow
 
