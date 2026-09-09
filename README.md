@@ -397,6 +397,30 @@ the answer instead of investigating for it.
 }
 ```
 
+**Incoming gRPC (called by Moderation Service)**
+
+`ApplicantService.GetApplicant` - returns the applicant's claimed profile so Moderation can check a
+decision against the rules. Server-to-server, so it does not pass through the API Gateway.
+`is_deceptive` is not part of the message.
+
+```proto
+rpc GetApplicant (GetApplicantRequest) returns (Applicant);
+
+message GetApplicantRequest { string applicant_id = 1; }
+
+message Applicant {
+  string applicant_id = 1;
+  string name = 2;
+  string student_id = 3;
+  string major = 4;
+  int32 year = 5;
+  string university_status = 6;
+  repeated string courses = 7;
+  string role = 8;
+}
+```
+
+
 **Events published (RabbitMQ)**
 
 `applicant_initialized` - published when Applicant Service is contacted first for a new applicant.
@@ -473,6 +497,30 @@ initialized the applicant itself. Idempotent on `applicant_id`, an applicant is 
   "course_registration": ["string"]
 }
 ```
+
+**Incoming gRPC (called by Moderation Service)**
+
+`CredentialService.GetCredentials` - returns the applicant's documents and their validity so
+Moderation can check a decision against the rules. Server-to-server, so it does not pass through
+the API Gateway. It returns the same verdict the players see; this service still never compares a
+document against University Record data.
+
+```proto
+rpc GetCredentials (GetCredentialsRequest) returns (Credentials);
+
+message GetCredentialsRequest { string applicant_id = 1; }
+
+message Credentials {
+  string applicant_id = 1;
+  DocumentStatus student_id_doc = 2;
+  string university_email = 3;
+  DocumentStatus enrollment_confirmation = 4;
+  repeated string course_registration = 5;
+}
+
+message DocumentStatus { bool valid = 1; string issue = 2; }
+```
+
 
 **Events published (RabbitMQ)**
 
