@@ -16,3 +16,9 @@
 [submodule "services/discord-dms-service"]
 	path = services/discord-dms-service
 	url = https://github.com/DannaCojocari/discord-dms-service
+[submodule "services/server-moderation-session-service"]
+	path = services/server-moderation-session-service
+	url = https://github.com/janeta1/server-moderation-session-service
+[submodule "services/player-service"]
+	path = services/player-service
+	url = https://github.com/janeta1/player-service
