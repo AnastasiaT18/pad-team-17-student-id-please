@@ -382,9 +382,13 @@ Applied to update `score`, `processed_count`, clear `current_applicant_id`, and 
   "role": "string"
 }
 ```
-`is_deceptive` is stored internally but is never returned in any player-facing response — it's the
-ground-truth answer the game is built around, so exposing it here would let a player just read
-the answer instead of investigating for it.
+`deception` is stored internally and travels between the three applicant-side services over
+RabbitMQ, but it is never returned in any player-facing response, and it is not part of any gRPC
+message either — not even the one Moderation Service calls. It is the ground-truth answer the game
+is built around: a player who could read it would have nothing left to investigate, and a player
+who could infer it from what Moderation returns before submitting a verdict would have the same
+advantage. Correctness is decided by Server Rules Service from the claim, the documents and the
+records — never from `deception` itself.
 
 
 **Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
@@ -422,7 +426,7 @@ message NextApplicantResponse { string applicant_id = 1; }
 
 `ApplicantService.GetApplicant` - returns the applicant's claimed profile so Moderation can check a
 decision against the rules. Server-to-server, so it does not pass through the API Gateway.
-`is_deceptive` is not part of the message.
+`deception` is not part of the message.
 
 ```proto
 rpc GetApplicant (GetApplicantRequest) returns (Applicant);
