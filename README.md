@@ -74,11 +74,12 @@ the current session.
 
 Arrows point from the service that initiates a call to the service it calls.
 
-Applicant Service is the designated entry point for new applicants — it initializes 
-a new applicant's profile and propagates it to Credential Service and University 
-Record Service. Per the spec, any of these three services could technically be 
-the first contacted; our team has fixed Applicant Service as that entry point for 
-consistency.
+New applicants can enter through any of Applicant Service, Credential Service or
+University Record Service. Whichever is contacted first mints the `applicant_id`,
+decides that applicant's `deception`, and publishes its `*_initialized` event; the
+other two build their own side of the applicant from it. All three end up describing
+the same person, and the deception stays consistent across claim, documents and
+records because it is decided once, at the point of entry.
 
 Moderation Service is the only service that reaches into the applicant-data cluster 
 after an applicant already exists — it queries Applicant, Credential, and University 
@@ -131,10 +132,14 @@ Trade-off: heavier services and slower startup — acceptable, since nothing her
 
 One database per service. No service reads another's tables — only its API or its events.
 
-Applicant, Credential and University Record hold the same applicant in three databases.
-Applicant Service publishes `applicant_initialized`; the other two build documents and ground truth
-from it. Consumers are idempotent on `applicant_id`, so a redelivery can't duplicate data.
-Consistency is eventual — fine, since an applicant is shown only after the session advances to them.
+Applicant, Credential and University Record hold the same applicant in three databases. Whichever
+of the three is contacted first mints the `applicant_id` and the `deception`, then publishes its
+`*_initialized` event; the other two build their own side from it. Consumers are idempotent on
+`applicant_id`, so a redelivery can't duplicate data, and an applicant is initialized only once no
+matter how many of the three events arrive.
+
+Consistency is eventual — acceptable here, since an applicant is only shown to the Moderator after
+the session advances to them.
 
 ### Conventions
 
@@ -382,6 +387,9 @@ ground-truth answer the game is built around, so exposing it here would let a pl
 the answer instead of investigating for it.
 
 
+**Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
+has already ended.
+
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
 // Response 200
@@ -396,6 +404,8 @@ the answer instead of investigating for it.
   "role": "string"
 }
 ```
+
+**Errors:** `404 APPLICANT_NOT_FOUND`.
 
 **Incoming gRPC**
 
@@ -438,6 +448,7 @@ message Applicant {
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
   "name": "string",
   "student_id": "string",
   "major": "string",
@@ -456,6 +467,9 @@ for this applicant, so all three stay in sync.
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
   "university_email": "string",
   "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
@@ -474,7 +488,9 @@ for this applicant, so all three stay in sync.
 ```
 
 Applicant Service builds its profile from whichever of these arrives, if it wasn't the one that
-initialized the applicant itself. Idempotent on `applicant_id`, an applicant is only initialized once.
+initialized the applicant itself, and takes `deception` from that event rather than deciding its
+own. That is what keeps the claim, the documents and the records describing the same lie.
+Idempotent on `applicant_id` — an applicant is only initialized once, however many of the events arrive.
 
 ---
 
@@ -482,10 +498,12 @@ initialized the applicant itself. Idempotent on `applicant_id`, an applicant is 
 
 **Client-facing REST (via API Gateway)**
 
-`POST /credentials` - generate credentials for a new applicant
+`POST /credentials` - generate credentials for a new applicant, when Credential Service is the
+first of the three applicant-side services to be contacted. It mints the `applicant_id` and the
+`deception`, then propagates both through `credential_initialized`.
 ```json
 // Request
-{ "applicant_id": "uuid" }
+{ "session_id": "uuid" }
 
 // Response 201
 {
@@ -496,6 +514,9 @@ initialized the applicant itself. Idempotent on `applicant_id`, an applicant is 
   "course_registration": ["string"]
 }
 ```
+
+**Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
+has already ended.
 
 `GET /credentials/{applicant_id}` - fetch an applicant's credentials and their validity
 ```json
@@ -509,7 +530,9 @@ initialized the applicant itself. Idempotent on `applicant_id`, an applicant is 
 }
 ```
 
-**Incoming gRPC (called by Moderation Service)**
+**Errors:** `404 APPLICANT_NOT_FOUND` if no credentials exist for that applicant.
+
+**Incoming gRPC**
 
 `CredentialService.GetCredentials` - returns the applicant's documents and their validity so
 Moderation can check a decision against the rules. Server-to-server, so it does not pass through
@@ -539,6 +562,9 @@ message DocumentStatus { bool valid = 1; string issue = 2; }
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
   "university_email": "string",
   "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
@@ -554,6 +580,7 @@ applicant.
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
   "name": "string",
   "student_id": "string",
   "major": "string",
@@ -574,7 +601,9 @@ applicant.
 }
 ```
 Credential Service builds its documents from whichever event arrives, if it wasn't the one that
-initialized the applicant itself. Idempotent on `applicant_id`.
+initialized the applicant itself, and forges them according to that event's `deception` — so a
+document contradicts the records in a specific, discoverable way instead of at random.
+Idempotent on `applicant_id`.
 
 ---
 ### Server Rules Service
@@ -689,6 +718,7 @@ Consumed by Applicant Service and Credential Service to build their own data for
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
   "name": "string",
   "student_id": "string",
   "major": "string",
@@ -703,6 +733,9 @@ Consumed by Applicant Service and Credential Service to build their own data for
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
   "university_email": "string",
   "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
