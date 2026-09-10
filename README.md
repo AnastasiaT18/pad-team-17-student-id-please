@@ -170,6 +170,8 @@ Data lives in one database per service. Services never touch each other's tables
 { "player_id": "uuid", "username": "string", "email": "string", "xp": 0, "level": 1, "created_at": "RFC3339" }
 ```
 
+**Errors:** `422 VALIDATION_FAILED` if username, email, or password is missing or malformed, `409 EMAIL_ALREADY_REGISTERED` if the email is already in use.
+
 `POST /players/login` - authenticate
 ```json
 // Request
@@ -178,6 +180,9 @@ Data lives in one database per service. Services never touch each other's tables
 // Response 200
 { "player_id": "uuid", "token": "jwt string" }
 ```
+
+**Errors:** `401 INVALID_CREDENTIALS` if the email/password combination is wrong.
+
 
 `GET /players/{player_id}` - fetch profile
 ```json
@@ -192,6 +197,9 @@ Data lives in one database per service. Services never touch each other's tables
   "disciplinary_actions": 0
 }
 ```
+
+**Errors:** `404 PLAYER_NOT_FOUND`.
+
 
 `PATCH /players/{player_id}` - update profile fields
 ```json
@@ -210,11 +218,17 @@ Data lives in one database per service. Services never touch each other's tables
 }
 ```
 
+**Errors:** `422 VALIDATION_FAILED` if a field is malformed, `403 FORBIDDEN` if the caller isn't this player, `404 PLAYER_NOT_FOUND`.
+
+
 `GET /players/{player_id}/friends` - list a player's friends
 ```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
 ```
+
+**Errors:** `404 PLAYER_NOT_FOUND`.
+
 
 `POST /players/{player_id}/friends` - add another player as a friend
 ```json
@@ -224,6 +238,9 @@ Data lives in one database per service. Services never touch each other's tables
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
 ```
+
+**Errors:** `404 PLAYER_NOT_FOUND` if `friend_id` doesn't exist, `409 ALREADY_FRIENDS` if the friendship already exists.
+
 
 **Events consumed (RabbitMQ)**
 
@@ -251,14 +268,17 @@ Idempotent on `(session_id, player_id)`.
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
 ```
 
-`POST /sessions/{session_id}/join` - a player joins an existing, not-yet-started session as Junior Moderator
-```json
-// Request
-{ "player_id": "uuid" }
+**Errors:** `422 VALIDATION_FAILED` if the request is malformed.
 
+
+`POST /sessions/{session_id}/join` - the calling player (identified via JWT) joins an existing, not-yet-started session as Junior Moderator
+```json
 // Response 200
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
 ```
+
+**Errors:** `404 SESSION_NOT_FOUND`, `409 SESSION_ALREADY_STARTED` if the session is no longer in `created` status, `409 ALREADY_JOINED` if the calling player is already in this session.
+
 
 `POST /sessions/{session_id}/start` - mark the session active, start the shift, and assign each Junior Moderator the record scope(s) they'll have access to for the whole shift (via
 `UniversityRecordService.AssignScopes`, below).
@@ -266,6 +286,9 @@ Idempotent on `(session_id, player_id)`.
 // Response 200
 { "session_id": "uuid", "status": "active", "started_at": "RFC3339" }
 ```
+
+**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended.
+
 
 `GET /sessions/{session_id}` - full state
 ```json
@@ -282,11 +305,17 @@ Idempotent on `(session_id, player_id)`.
 }
 ```
 
+**Errors:** `404 SESSION_NOT_FOUND`.
+
+
 `GET /sessions/{session_id}/current-applicant` - the applicant currently under review
 ```json
 // Response 200
 { "applicant_id": "uuid | null", "processed_count": 0 }
 ```
+
+**Errors:** `404 SESSION_NOT_FOUND`.
+
 
 `POST /sessions/{session_id}/end` - end the shift and finalize results
 ```json
@@ -298,6 +327,9 @@ Idempotent on `(session_id, player_id)`.
   "results": [ { "player_id": "uuid", "xp_gained": 0, "shift_completed": true, "disciplinary_action": false } ]
 }
 ```
+
+**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_NOT_ACTIVE` if the session isn't currently active.
+
 Triggers publishing `shift_ended` (below).
 
 **Outgoing gRPC calls (needs an answer)**
