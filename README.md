@@ -397,7 +397,18 @@ the answer instead of investigating for it.
 }
 ```
 
-**Incoming gRPC (called by Moderation Service)**
+**Incoming gRPC**
+
+`ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
+shift to its next applicant. Generates the applicant if the session has none pending.
+
+```proto
+rpc GetNextApplicant (NextApplicantRequest) returns (NextApplicantResponse);
+
+message NextApplicantRequest { string session_id = 1; }
+
+message NextApplicantResponse { string applicant_id = 1; }
+```
 
 `ApplicantService.GetApplicant` - returns the applicant's claimed profile so Moderation can check a
 decision against the rules. Server-to-server, so it does not pass through the API Gateway.
