@@ -673,9 +673,41 @@ Holds no applicant data — evaluates whatever it's handed, per request.
     { "rule_id": "uuid", "description": "string", "condition": "string" }
   ]
 }
+
+// Response 422 — rules is missing, null, or a rule is missing description/condition
+{ "error": { "code": "VALIDATION_FAILED", "message": "human text" } }
+
+// Response 400 — request body is not valid JSON
+{ "error": { "code": "VALIDATION_FAILED", "message": "Request body is malformed" } }
 ```
 
+### Rule condition format
+
+A `condition` string has the shape `<field> <operator> <value>`. **Matching means the applicant violates the rule** — write conditions to describe the disqualifying state, not the allowed one.
+
+Supported fields and operators:
+
+| Field | Type | Operators |
+|---|---|---|
+| `university_status` | string | `==`, `!=` |
+| `year` | number | `==`, `!=`, `>=`, `<=`, `>`, `<` |
+| `credentials_valid` | boolean | `==`, `!=` |
+| `previously_banned` | boolean | `==`, `!=` |
+| `courses` | list | `contains`, `!=` (not contains) |
+
+Examples:
+- previously_banned == true → violation if the applicant was previously banned
+- courses != PAD → violation if the applicant hasn't taken PAD
+- university_status != faf_student → violation if the applicant isn't an FAF student
+- year <= 1 → violation if the applicant is a first-year
+
+Malformed conditions (unparseable syntax, unknown fields, non-numeric values on a numeric field) are silently skipped rather than causing an error — the applicant just isn't evaluated against that specific rule.
+
 No events published or consumed — Server Rules Service doesn't participate in the applicant propagation pattern.
+
+**Incoming gRPC (called by Moderation Service)**
+
+`EvaluateApplicant` — see Moderation Service's outgoing gRPC calls above for the full request/response shape. Moderation Service assembles the request from Applicant, Credential, and University Record Services' responses; Server Rules Service never fetches applicant data itself.
 
 ---
 
