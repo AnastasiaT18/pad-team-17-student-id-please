@@ -715,10 +715,10 @@ No events published or consumed — Server Rules Service doesn't participate in 
 
 **Client-facing REST (via API Gateway)**
 
-`POST /records` - generate ground-truth records for a new applicant (used if University Record Service is contacted first)
+`POST /records` - generate ground-truth records for a new applicant, when University Record Service is the first of the three applicant-side services to be contacted. It mints the applicant_id and the deception, then propagates both through record_initialized.
 ```json
 // Request
-{ "applicant_id": "uuid" }
+{ "session_id": "uuid" }
 
 // Response 201
 {
@@ -728,7 +728,12 @@ No events published or consumed — Server Rules Service doesn't participate in 
   "courses": ["string"],
   "previously_banned": false
 }
+
+// Response 422 — session_id is missing or blank
+{ "error": { "code": "VALIDATION_FAILED", "message": "human text" } }
 ```
+Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it has already ended.
+
 
 `GET /sessions/{session_id}/records/{applicant_id}` - fetch the records the calling player is assigned to see, for this applicant, in this session
 ```json
@@ -743,12 +748,16 @@ No events published or consumed — Server Rules Service doesn't participate in 
 
 // Response 403 — player has no scope assignment for this session
 { "error": { "code": "NOT_ASSIGNED_TO_SESSION", "message": "human text" } }
+
+// Response 404 — no record exists for this applicant
+{ "error": { "code": "VALIDATION_FAILED", "message": "applicant not found" } }
 ```
 The service no longer trusts a client-supplied `scope` value. Instead it looks up which scope(s)
 the calling player (from the JWT) was assigned via `AssignScopes` — a gRPC call made by Server
 Moderation Session Service when the shift starts — and returns only that data. A player who
 wasn't in the session, or has no assignment, gets `403`. This is the actual enforcement point
 for the partitioning promised in Service Boundaries.
+
 
 **Incoming gRPC (called by Server Moderation Session Service at shift start)**
 
@@ -772,6 +781,9 @@ message AssignScopesResponse { bool success = 1; }
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "enrollment_status": "string",
   "academic_year": 0,
   "courses": ["string"],
