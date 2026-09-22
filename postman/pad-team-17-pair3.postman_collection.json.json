@@ -1,0 +1,536 @@
+{
+  "info": {
+    "_postman_id": "bddee5ce-d230-4d9f-ba60-7156d23cb618",
+    "name": "PAD Team 17 - Pair 3 (Server Rules + University Record)",
+    "description": "Server Rules Service and University Record Service, Team 17 \"Student ID, please\".\n\nRun the services first - see deploy/docker-compose.yml in this repository.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "50442487",
+    "_collection_link": "https://go.postman.co/collection/50442487-bddee5ce-d230-4d9f-ba60-7156d23cb618?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Server Rules Service",
+      "item": [
+        {
+          "name": "Get Rules",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('response has a rules array', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('rules');",
+                  "  pm.expect(body.rules).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{server_rules_url}}/rules",
+              "host": [
+                "{{server_rules_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returned rules have generated rule_id and match input', () => {",
+                  "  pm.expect(body.rules).to.have.lengthOf(1);",
+                  "  pm.expect(body.rules[0]).to.have.property('rule_id');",
+                  "  pm.expect(body.rules[0].description).to.eql('Only FAF students');",
+                  "  pm.expect(body.rules[0].condition).to.eql('university_status != faf_student');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    { \"description\": \"Only FAF students\", \"condition\": \"university_status != faf_student\" }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{server_rules_url}}/rules",
+              "host": [
+                "{{server_rules_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            },
+            "description": "Replaces the entire active rule set. Note: this wipes the previous rules, so run 'Get Rules' before this if you want to see the prior state."
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - missing condition (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('error code is VALIDATION_FAILED', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    { \"description\": \"Only FAF students\" }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{server_rules_url}}/rules",
+              "host": [
+                "{{server_rules_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - rules field missing (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('error code is VALIDATION_FAILED', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{server_rules_url}}/rules",
+              "host": [
+                "{{server_rules_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('error code is VALIDATION_FAILED', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{server_rules_url}}/rules",
+              "host": [
+                "{{server_rules_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "University Record Service",
+      "item": [
+        {
+          "name": "Create Record - Missing session_id (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Code is VALIDATION_FAILED\", () => pm.expect(pm.response.json().error.code).to.eql(\"VALIDATION_FAILED\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{university_record_url}}/records",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record, unknown applicant (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_player1}}"
+              }
+            ],
+            "url": {
+              "raw": "{{university_record_url}}/sessions/test-session/records/nonexistent-id",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "sessions",
+                "test-session",
+                "records",
+                "nonexistent-id"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"session_id\":",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{university_record_url}}/records",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const response = pm.response.json();",
+                  "pm.collectionVariables.set(\"applicant_id\", response.applicant_id);",
+                  "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"session_id\": \"test-session\" }",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{university_record_url}}/records",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Has assigned_scopes\", () => pm.expect(pm.response.json()).to.have.property(\"assigned_scopes\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_player1}}"
+              }
+            ],
+            "url": {
+              "raw": "{{university_record_url}}/sessions/test-session/records/{{applicant_id}}",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "sessions",
+                "test-session",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record - no Authorization header (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{university_record_url}}/sessions/test-session/records/{{applicant_id}}",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "sessions",
+                "test-session",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record - not assigned to session (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"Code is NOT_ASSIGNED_TO_SESSION\", () => pm.expect(pm.response.json().error.code).to.eql(\"NOT_ASSIGNED_TO_SESSION\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token_stranger}}"
+              }
+            ],
+            "url": {
+              "raw": "{{university_record_url}}/sessions/test-session/records/{{applicant_id}}",
+              "host": [
+                "{{university_record_url}}"
+              ],
+              "path": [
+                "sessions",
+                "test-session",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "description": "Before running: this service's GET endpoint needs a player to have an assigned scope in the session. AssignScopes is gRPC only, so run this once via grpcurl before using this collection:\n\ngrpcurl -plaintext -proto src/main/proto/university_record.proto -d '{\"session_id\":\"test-session\",\"assignments\":[{\"player_id\":\"player-1\",\"scopes\":[\"enrollment\",\"courses\"]}]}' localhost:9090 UniversityRecordService/AssignScopes\n\nThe collection variable `token_player1` is a hand-built, unsigned JWT with sub=player-1 (signature verification isn't implemented yet, see README). `token_stranger` has sub=someone-never-assigned, used for the 403 case."
+    }
+  ],
+  "variable": [
+    {
+      "key": "server_rules_url",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "applicant_id",
+      "value": ""
+    },
+    {
+      "key": "token_player1",
+      "value": "eyJhbGciOiAibm9uZSJ9.eyJzdWIiOiAicGxheWVyLTEifQ.fake"
+    },
+    {
+      "key": "token_stranger",
+      "value": "eyJhbGciOiAibm9uZSJ9.eyJzdWIiOiAic3RyYW5nZXIifQ.fake"
+    },
+    {
+      "key": "university_record_url",
+      "value": "http://localhost:8080"
+    }
+  ]
+}

@@ -709,6 +709,21 @@ No events published or consumed — Server Rules Service doesn't participate in 
 
 `EvaluateApplicant` — see Moderation Service's outgoing gRPC calls above for the full request/response shape. Moderation Service assembles the request from Applicant, Credential, and University Record Services' responses; Server Rules Service never fetches applicant data itself.
 
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.1.1`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
+3. Run via the team's `docker-compose.yml` (see `/deployment` in this CPR) — it references this image by tag, along with PostgreSQL.
+
+**Ports:** `8080` (REST), `9090` (gRPC)
+
+**DockerHub:** `anastasiatiganescu/server-rules-service:v0.1.1` (public, `linux/amd64` + `linux/arm64`)
+
+**Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
 ---
 
 ### University Record Service
@@ -729,10 +744,13 @@ No events published or consumed — Server Rules Service doesn't participate in 
   "previously_banned": false
 }
 
+// Response 400 — request body is not valid JSON
+{ "error": { "code": "VALIDATION_FAILED", "message": "Request body is malformed" } }
+
 // Response 422 — session_id is missing or blank
 { "error": { "code": "VALIDATION_FAILED", "message": "human text" } }
 ```
-Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it has already ended.
+Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` (Not yet enforced — see the service's own README.)
 
 
 `GET /sessions/{session_id}/records/{applicant_id}` - fetch the records the calling player is assigned to see, for this applicant, in this session
@@ -745,6 +763,9 @@ Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_
   "assigned_scopes": ["enrollment"],
   "data": { "enrollment": { "enrollment_status": "string" } }
 }
+
+// Response 401 — missing or malformed Authorization header / token
+{ "error": { "code": "UNAUTHORIZED", "message": "human text" } }
 
 // Response 403 — player has no scope assignment for this session
 { "error": { "code": "NOT_ASSIGNED_TO_SESSION", "message": "human text" } }
@@ -774,6 +795,7 @@ message PlayerScopeAssignment {
 }
 message AssignScopesResponse { bool success = 1; }
 ```
+Idempotent per `(session_id, player_id)` — a repeated call for the same pair replaces the stored scopes rather than duplicating the row.
 
 **Events published (RabbitMQ)**
 
@@ -823,6 +845,27 @@ Consumed by Applicant Service and Credential Service to build their own data for
 }
 ```
 University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant itself. Idempotent on `applicant_id`.
+
+Not yet consuming `decision_made` (see Moderation Service below) — planned for a future lab, so previously_banned isn't updated when a Moderator bans an applicant
+
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.1.1`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
+   - `JWT_SECRET`
+3. Run via the team's `docker-compose.yml` (see `/deployment` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+
+**Ports:** `8080` (REST), `9090` (gRPC)
+
+**DockerHub:** `anastasiatiganescu/university-record-service:v0.1.1` (public, `linux/amd64` + `linux/arm64`)
+
+**Note:** `JWT_SECRET` must match whatever signing secret Player Service uses once real authentication is wired in (Lab 2+) — currently a local placeholder for testing the scope-filtering mechanism only.
+
+**Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
 ---
 
@@ -903,7 +946,7 @@ message EvaluateApplicantRequest {
   bool previously_banned = 6;
 }
 message EvaluateApplicantResponse {
-  bool allowed = 1;
+  string expected_verdict = 1;   // "accept" | "reject" | "flag" | "ban"
   repeated string violated_rule_ids = 2;
 }
 ```
