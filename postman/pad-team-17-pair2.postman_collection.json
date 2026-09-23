@@ -120,6 +120,135 @@
           ]
         },
         {
+          "name": "Amend applicant claim",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicant_url}}/applicants/{{applicant_id}}",
+              "host": [
+                "{{applicant_url}}"
+              ],
+              "path": [
+                "applicants",
+                "{{applicant_id}}"
+              ]
+            },
+            "description": "The applicant changes their story. Any subset of the claim; the rest stays as it was.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"year\": 3,\n  \"courses\": [\"PAD\", \"SO\"]\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('the amended fields changed', () => {",
+                  "  pm.expect(body.year).to.eql(3);",
+                  "  pm.expect(body.courses).to.eql(['PAD', 'SO']);",
+                  "});",
+                  "pm.test('deception is never exposed to players', () => pm.expect(body).to.not.have.property('deception'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Amend applicant - student_id is immutable",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicant_url}}/applicants/{{applicant_id}}",
+              "host": [
+                "{{applicant_url}}"
+              ],
+              "path": [
+                "applicants",
+                "{{applicant_id}}"
+              ]
+            },
+            "description": "The student ID is the card the applicant is holding; the documents and records were built from it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"student_id\": \"FAF-24-9999\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));",
+                  "pm.test('names the field the way it was sent', () =>",
+                  "  pm.expect(pm.response.json().error.message).to.match(/^student_id cannot be changed/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Amend applicant - nothing to change",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicant_url}}/applicants/{{applicant_id}}",
+              "host": [
+                "{{applicant_url}}"
+              ],
+              "path": [
+                "applicants",
+                "{{applicant_id}}"
+              ]
+            },
+            "description": "A PATCH that names no field is almost certainly a client bug.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Get applicant - unknown id",
           "request": {
             "method": "GET",
@@ -456,6 +585,89 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resubmit documents",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credential_url}}/credentials/{{credential_applicant_id}}",
+              "host": [
+                "{{credential_url}}"
+              ],
+              "path": [
+                "credentials",
+                "{{credential_applicant_id}}"
+              ]
+            },
+            "description": "The applicant hands in a corrected email. The verdicts on the card and the confirmation do not move.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"university_email\": \"corrected@isa.utm.md\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the email was replaced', () => pm.expect(pm.response.json().university_email).to.eql('corrected@isa.utm.md'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resubmit documents - verdicts cannot be set",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credential_url}}/credentials/{{credential_applicant_id}}",
+              "host": [
+                "{{credential_url}}"
+              ],
+              "path": [
+                "credentials",
+                "{{credential_applicant_id}}"
+              ]
+            },
+            "description": "A verdict is this service's finding, never client input - otherwise a forged card could be marked valid by its owner.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"student_id_doc\": { \"valid\": true, \"issue\": \"none\" }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));",
+                  "pm.test('names the field the way it was sent', () =>",
+                  "  pm.expect(pm.response.json().error.message).to.match(/^student_id_doc is decided by this service/));"
                 ]
               }
             }

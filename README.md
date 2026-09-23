@@ -445,6 +445,43 @@ exists - see "Running this service" below.
 
 **Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
+`GET /applicants?session_id={session_id}` - every applicant, or only those of one shift, oldest first
+```json
+// Response 200
+[ { "applicant_id": "uuid", "name": "string", "student_id": "string", "...": "as above" } ]
+```
+
+`PATCH /applicants/{applicant_id}` - the applicant amends their claim
+
+Any subset of the claimed fields; whatever is left out stays as it was. Only the claim moves:
+`student_id` is the card the applicant is holding and `deception` is what the documents and records
+were generated from, so neither can be rewritten. The documents and records keep describing what
+the applicant presented on arrival, which is what makes a changed story suspicious. Nothing is
+published - the claim is Applicant Service's alone.
+```json
+// Request - every field optional
+{
+  "name": "string",
+  "major": "string",
+  "year": 1,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+
+// Response 200 - the amended profile, same shape as GET
+```
+**Errors:** `422 VALIDATION_FAILED` if no field is given, if `year` is outside 1-6, if a text field is
+blank, or if the body tries to change `student_id`, `applicant_id` or `session_id`;
+`400 VALIDATION_FAILED` if the body is not valid JSON; `404 APPLICANT_NOT_FOUND`;
+`409 SESSION_NOT_ACTIVE` if the applicant's shift is no longer running.
+
+`DELETE /applicants/{applicant_id}` - removes the applicant
+```json
+// Response 204 - no body
+```
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
+
 **Incoming gRPC**
 
 `ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
@@ -537,7 +574,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.2.1`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -548,7 +585,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 
 **Ports:** `8081` (REST)
 
-**DockerHub:** `kutulin/pad-17-applicant-service:0.2.1` (public)
+**DockerHub:** `kutulin/pad-17-applicant-service:0.3.0` (public)
 
 **Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/applicant/` for reading.
 
@@ -599,6 +636,38 @@ exists - see "Running this service" below.
 
 **Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND` if no
 credentials exist for that applicant.
+
+`GET /credentials` - every document set Credential Service holds
+```json
+// Response 200
+[ { "applicant_id": "uuid", "student_id_doc": { "valid": true, "issue": "none" }, "...": "as above" } ]
+```
+
+`PATCH /credentials/{applicant_id}` - the applicant hands in corrected documents
+
+Only the self-reported documents can be handed in again: `university_email` and
+`course_registration`. The student ID card and the enrollment confirmation cannot, and neither can
+their verdicts - a verdict is this service's finding, never client input. A corrected mailbox does
+not un-forge a forged card, and an expired confirmation stays expired. Nothing is published.
+```json
+// Request - every field optional
+{
+  "university_email": "string",
+  "course_registration": ["string"]
+}
+
+// Response 200 - the documents after resubmission, same shape as GET
+```
+**Errors:** `422 VALIDATION_FAILED` if no field is given, if `university_email` is not an email
+address, if `course_registration` is empty, or if the body tries to set `student_id_doc`,
+`enrollment_confirmation` or `applicant_id`; `400 VALIDATION_FAILED` if the body is not valid JSON;
+`404 APPLICANT_NOT_FOUND`.
+
+`DELETE /credentials/{applicant_id}` - removes the document set
+```json
+// Response 204 - no body
+```
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
 **Incoming gRPC**
 
@@ -680,7 +749,7 @@ Idempotent on `applicant_id`.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.2.1`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -691,7 +760,7 @@ Idempotent on `applicant_id`.
 
 **Ports:** `8082` (REST)
 
-**DockerHub:** `kutulin/pad-17-credential-service:0.2.1` (public)
+**DockerHub:** `kutulin/pad-17-credential-service:0.3.0` (public)
 
 **Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/credential/` for reading.
 
