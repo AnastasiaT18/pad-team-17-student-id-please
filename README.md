@@ -517,9 +517,13 @@ for this applicant, so all three stay in sync.
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "enrollment_status": "string",
   "academic_year": 0,
-  "courses": ["string"]
+  "courses": ["string"],
+  "previously_banned": false
 }
 ```
 
@@ -527,6 +531,26 @@ Applicant Service builds its profile from whichever of these arrives, if it wasn
 initialized the applicant itself, and takes `deception` from that event rather than deciding its
 own. That is what keeps the claim, the documents and the records describing the same lie.
 Idempotent on `applicant_id` — an applicant is only initialized once, however many of the events arrive.
+
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.1.0`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+   - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+
+**Ports:** `8081` (REST)
+
+**DockerHub:** `kutulin/pad-17-applicant-service:0.1.0` (public)
+
+**Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/applicant/` for reading.
+
+**Source code / build details:** private repo `pad-team-17-applicant-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
 
 ---
 
@@ -631,15 +655,39 @@ applicant.
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "enrollment_status": "string",
   "academic_year": 0,
-  "courses": ["string"]
+  "courses": ["string"],
+  "previously_banned": false
 }
 ```
 Credential Service builds its documents from whichever event arrives, if it wasn't the one that
 initialized the applicant itself, and forges them according to that event's `deception` — so a
 document contradicts the records in a specific, discoverable way instead of at random.
 Idempotent on `applicant_id`.
+
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.1.0`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+   - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+
+**Ports:** `8082` (REST)
+
+**DockerHub:** `kutulin/pad-17-credential-service:0.1.0` (public)
+
+**Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/credential/` for reading.
+
+**Source code / build details:** private repo `pad-team-17-credential-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
 
 ---
 ### Server Rules Service
@@ -716,7 +764,7 @@ No events published or consumed — Server Rules Service doesn't participate in 
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
-3. Run via the team's `docker-compose.yml` (see `/deployment` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
 
 **Ports:** `8080` (REST), `9090` (gRPC)
 
@@ -857,7 +905,7 @@ Not yet consuming `decision_made` (see Moderation Service below) — planned for
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
    - `JWT_SECRET`
-3. Run via the team's `docker-compose.yml` (see `/deployment` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8080` (REST), `9090` (gRPC)
 
