@@ -423,8 +423,10 @@ advantage. Correctness is decided by Server Rules Service from the claim, the do
 records — never from `deception` itself.
 
 
-**Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
-has already ended.
+**Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
+is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
+it is not running. The session check is served by a mock until Server Moderation Session Service
+exists - see "Running this service" below.
 
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
@@ -441,7 +443,7 @@ has already ended.
 }
 ```
 
-**Errors:** `404 APPLICANT_NOT_FOUND`.
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
 **Incoming gRPC**
 
@@ -535,19 +537,22 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.2.1`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8081` (REST)
 
-**DockerHub:** `kutulin/pad-17-applicant-service:0.1.0` (public)
+**DockerHub:** `kutulin/pad-17-applicant-service:0.2.1` (public)
 
 **Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/applicant/` for reading.
+
+**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
 
 **Source code / build details:** private repo `pad-team-17-applicant-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -575,8 +580,10 @@ first of the three applicant-side services to be contacted. It mints the `applic
 }
 ```
 
-**Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
-has already ended.
+**Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
+is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
+it is not running. The session check is served by a mock until Server Moderation Session Service
+exists - see "Running this service" below.
 
 `GET /credentials/{applicant_id}` - fetch an applicant's credentials and their validity
 ```json
@@ -590,7 +597,8 @@ has already ended.
 }
 ```
 
-**Errors:** `404 APPLICANT_NOT_FOUND` if no credentials exist for that applicant.
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND` if no
+credentials exist for that applicant.
 
 **Incoming gRPC**
 
@@ -672,19 +680,22 @@ Idempotent on `applicant_id`.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.2.1`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8082` (REST)
 
-**DockerHub:** `kutulin/pad-17-credential-service:0.1.0` (public)
+**DockerHub:** `kutulin/pad-17-credential-service:0.2.1` (public)
 
 **Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/credential/` for reading.
+
+**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
 
 **Source code / build details:** private repo `pad-team-17-credential-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 

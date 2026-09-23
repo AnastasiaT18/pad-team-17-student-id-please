@@ -157,7 +157,12 @@
           "name": "Create applicant - missing session_id",
           "request": {
             "method": "POST",
-            "header": [],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{applicant_url}}/applicants",
               "host": [
@@ -167,7 +172,7 @@
                 "applicants"
               ]
             },
-            "description": "Validation failure returns 400 INVALID_PAYLOAD.",
+            "description": "Parses, but breaks a rule: 422 VALIDATION_FAILED, the code the whole team uses.",
             "body": {
               "mode": "raw",
               "raw": "{}"
@@ -180,9 +185,129 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create applicant - body is not JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicant_url}}/applicants",
+              "host": [
+                "{{applicant_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "Does not parse at all: 400 VALIDATION_FAILED, in the team's envelope rather than Spring's default error body.",
+            "body": {
+              "mode": "raw",
+              "raw": "{not json"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
                   "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
                   "pm.test('uses the shared error envelope', () =>",
-                  "  pm.expect(pm.response.json().error.code).to.eql('INVALID_PAYLOAD'));"
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create applicant - unknown session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicant_url}}/applicants",
+              "host": [
+                "{{applicant_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "Session Service is mocked until it exists; this id is configured as missing.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{unknown_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create applicant - session not running",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicant_url}}/applicants",
+              "host": [
+                "{{applicant_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "Session Service is mocked until it exists; this id is configured as not running.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{ended_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_ACTIVE'));"
                 ]
               }
             }
@@ -369,6 +494,166 @@
           ]
         },
         {
+          "name": "Create credentials - missing session_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credential_url}}/credentials",
+              "host": [
+                "{{credential_url}}"
+              ],
+              "path": [
+                "credentials"
+              ]
+            },
+            "description": "Parses, but breaks a rule: 422 VALIDATION_FAILED, the code the whole team uses.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create credentials - body is not JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credential_url}}/credentials",
+              "host": [
+                "{{credential_url}}"
+              ],
+              "path": [
+                "credentials"
+              ]
+            },
+            "description": "Does not parse at all: 400 VALIDATION_FAILED, in the team's envelope rather than Spring's default error body.",
+            "body": {
+              "mode": "raw",
+              "raw": "{not json"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create credentials - unknown session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credential_url}}/credentials",
+              "host": [
+                "{{credential_url}}"
+              ],
+              "path": [
+                "credentials"
+              ]
+            },
+            "description": "Session Service is mocked until it exists; this id is configured as missing.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{unknown_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create credentials - session not running",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credential_url}}/credentials",
+              "host": [
+                "{{credential_url}}"
+              ],
+              "path": [
+                "credentials"
+              ]
+            },
+            "description": "Session Service is mocked until it exists; this id is configured as not running.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{ended_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('uses the shared error envelope', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Delete credentials",
           "request": {
             "method": "DELETE",
@@ -421,6 +706,14 @@
     {
       "key": "credential_applicant_id",
       "value": ""
+    },
+    {
+      "key": "unknown_session_id",
+      "value": "00000000-0000-0000-0000-000000000404"
+    },
+    {
+      "key": "ended_session_id",
+      "value": "00000000-0000-0000-0000-0000000e0d0d"
     }
   ]
 }
