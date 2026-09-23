@@ -106,7 +106,7 @@ records, rule predicates. Static types, Bean Validation and JPA catch bad state 
 validation time instead of during a demo.
 Trade-off: heavier services and slower startup — acceptable, since nothing here holds a live connection.
 
-**Pinned:** JDK 21 LTS, Node 20 LTS.
+**Pinned:** JDK 21 LTS, Node 24 LTS.
 
 | Service | Pair | Stack | DB |
 |---|---|---|---|
@@ -871,29 +871,251 @@ Not yet consuming `decision_made` (see Moderation Service below) — planned for
 
 ### Moderation Service
 
-**Client-facing REST (via API Gateway)**
+The Moderation Service is responsible for processing moderator decisions for applicants.
 
-`POST /sessions/{session_id}/applicants/{applicant_id}/decision` - submit a verdict for the current applicant
+For each submitted verdict, it gathers applicant information, credentials, and university records, sends the relevant data to the Server Rules Service for evaluation, compares the moderator's verdict with the expected verdict, calculates the penalty, stores the decision, and publishes a `decision_made` event.
+
+The Moderation Service does not define the rules that determine whether an applicant should be accepted, rejected, flagged, or banned. That responsibility belongs to the Server Rules Service.
+
+For Lab 1, dependencies on other microservices and RabbitMQ are implemented using mocks. The interfaces are kept separate so they can later be replaced by gRPC clients and a RabbitMQ publisher.
+
+#### Requirements
+
+To run the service locally, the following software is required:
+
+- Node.js 24+
+- npm
+- PostgreSQL 16+
+
+Alternatively, Docker can be used to run both the service and its PostgreSQL database:
+
+- Docker
+- Docker Compose
+
+The service uses the following main technologies:
+
+- TypeScript
+- NestJS
+- TypeORM
+- PostgreSQL
+- gRPC for future synchronous service-to-service communication
+- RabbitMQ for future asynchronous event publishing
+
+Create a `.env` file based on `.env.example`:
+
+```env
+PORT=3000
+
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=moderation
+DB_PASSWORD=change_me
+DB_DATABASE=moderation
+```
+
+Use the actual values defined in `.env.example` if they differ from the example above.
+
+For local development, install the dependencies and start the service:
+
+```bash
+npm install
+npm run start:dev
+```
+
+When running locally, the Moderation Service is available at:
+
+```text
+http://localhost:3000
+```
+
+
+#### Running with Docker
+
+The service and its PostgreSQL database can be started using Docker Compose:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+The Moderation Service runs on port `3000` inside its container and is exposed on the host at:
+
+```text
+http://localhost:8085
+```
+
+The deployment also starts the PostgreSQL database used by the Moderation Service.
+
+The published Docker image is:
+
+```text
+dannacojocari/moderation-service:0.2.0
+```
+
+The image supports:
+
+```text
+linux/amd64
+linux/arm64
+```
+
+PostgreSQL data is stored in a persistent Docker volume.
+
+To check the containers:
+
+```bash
+docker compose -f deploy/docker-compose.yml ps
+```
+
+To stop the service:
+
+```bash
+docker compose -f deploy/docker-compose.yml down
+```
+
+#### Communication
+
+The Moderation Service uses different communication mechanisms depending on the operation.
+
+**REST**
+
+REST is used by clients to submit and manage moderation decisions.
+
+**gRPC**
+
+gRPC is the planned synchronous service-to-service communication mechanism.
+
+The Moderation Service requires information from:
+
+- Applicant Service
+- Credential Service
+- University Record Service
+- Server Rules Service
+
+For Lab 1, these dependencies are represented by mock implementations behind service interfaces. The mocks can later be replaced by gRPC clients without changing the moderation decision logic.
+
+**RabbitMQ**
+
+RabbitMQ is the planned asynchronous communication mechanism for publishing moderation results.
+
+After a new decision is successfully persisted, the Moderation Service publishes a `decision_made` event.
+
+For Lab 1, the RabbitMQ publisher is represented by a mock implementation. The same publisher abstraction can later be backed by RabbitMQ.
+
+#### Decisions REST API
+
+`POST /sessions/{session_id}/applicants/{applicant_id}/decision` - submit a moderator verdict for an applicant
+
 ```json
-// Request
-{ "verdict": "accept | reject | flag | ban" }
-
-// Response 200
 {
-  "applicant_id": "uuid",
-  "verdict": "accept | reject | flag | ban",
-  "correct": true,
-  "violated_rule_ids": ["uuid"],
-  "penalty": 0
+  "verdict": "accept"
 }
 ```
 
-**Outgoing gRPC calls (needs an answer)**
+Possible verdicts are:
 
-`ApplicantService.GetApplicant`
+```text
+accept
+reject
+flag
+ban
+```
+
+A successful response uses the following format:
+
+```json
+{
+  "id": "uuid",
+  "session_id": "uuid",
+  "applicant_id": "uuid",
+  "moderator_id": "uuid",
+  "verdict": "accept",
+  "correct": true,
+  "violated_rule_ids": [],
+  "penalty": 0,
+  "created_at": "2026-09-20T12:00:00.000Z",
+  "updated_at": "2026-09-20T12:00:00.000Z"
+}
+```
+
+Only one decision may exist for the same applicant within the same session.
+
+`GET /decisions` - list all stored moderation decisions
+
+`GET /decisions/{decision_id}` - retrieve a specific moderation decision
+
+`PATCH /decisions/{decision_id}` - update the verdict of an existing decision
+
+```json
+{
+  "verdict": "reject"
+}
+```
+
+Only `verdict` may be modified by the client.
+
+The following fields are controlled by the service:
+
+- `session_id`
+- `applicant_id`
+- `moderator_id`
+- `correct`
+- `violated_rule_ids`
+- `penalty`
+
+When the verdict is updated, the Moderation Service evaluates the applicant again and recalculates `correct`, `violated_rule_ids`, and `penalty`.
+
+A moderator may only update decisions that they own.
+
+`DELETE /decisions/{decision_id}` - delete a moderation decision
+
+A moderator may only delete decisions that they own.
+
+A successful deletion returns:
+
+```text
+204 No Content
+```
+
+#### Decision Evaluation
+
+The Moderation Service does not determine which verdict an applicant should receive.
+
+It gathers the required information and sends the evaluation data to the Server Rules Service. The Server Rules Service returns an `expected_verdict` and any violated rules.
+
+The Moderation Service determines correctness using:
+
+```text
+correct = submitted_verdict == expected_verdict
+```
+
+The rules that determine whether an applicant should be accepted, rejected, flagged, or banned belong to the Server Rules Service.
+
+#### Penalty Calculation
+
+The Moderation Service calculates a penalty by comparing the submitted verdict with the expected verdict.
+
+| Expected | Accept | Flag | Reject | Ban |
+|---|---:|---:|---:|---:|
+| Accept | 0 | 1 | 2 | 3 |
+| Flag | 1 | 0 | 1 | 2 |
+| Reject | 2 | 1 | 0 | 2 |
+| Ban | 3 | 2 | 1 | 0 |
+
+A correct decision always has a penalty of `0`. Larger differences from the expected moderation action result in higher penalties.
+
+#### gRPC Contracts
+
+The following contracts describe the synchronous dependencies required by the Moderation Service.
+
+##### `ApplicantService.GetApplicant`
+
 ```proto
 rpc GetApplicant (GetApplicantRequest) returns (Applicant);
-message GetApplicantRequest { string applicant_id = 1; }
+
+message GetApplicantRequest {
+  string applicant_id = 1;
+}
+
 message Applicant {
   string applicant_id = 1;
   string name = 2;
@@ -906,10 +1128,15 @@ message Applicant {
 }
 ```
 
-`CredentialService.GetCredentials`
+##### `CredentialService.GetCredentials`
+
 ```proto
 rpc GetCredentials (GetCredentialsRequest) returns (Credentials);
-message GetCredentialsRequest { string applicant_id = 1; }
+
+message GetCredentialsRequest {
+  string applicant_id = 1;
+}
+
 message Credentials {
   string applicant_id = 1;
   DocumentStatus student_id_doc = 2;
@@ -917,13 +1144,23 @@ message Credentials {
   DocumentStatus enrollment_confirmation = 4;
   repeated string course_registration = 5;
 }
-message DocumentStatus { bool valid = 1; string issue = 2; }
+
+message DocumentStatus {
+  bool valid = 1;
+  string issue = 2;
+}
 ```
 
-`UniversityRecordService.GetRecordSnapshot`
+##### `UniversityRecordService.GetRecordSnapshot`
+
 ```proto
-rpc GetRecordSnapshot (GetRecordSnapshotRequest) returns (RecordSnapshot);
-message GetRecordSnapshotRequest { string applicant_id = 1; }
+rpc GetRecordSnapshot (GetRecordSnapshotRequest)
+    returns (RecordSnapshot);
+
+message GetRecordSnapshotRequest {
+  string applicant_id = 1;
+}
+
 message RecordSnapshot {
   string applicant_id = 1;
   string enrollment_status = 2;
@@ -932,11 +1169,15 @@ message RecordSnapshot {
   bool previously_banned = 5;
 }
 ```
-Unscoped — returns the full record regardless of player assignment, since this call is server-to-server, not client-facing.
 
-`ServerRulesService.EvaluateApplicant`
+This is a server-to-server request and returns the record information required by the Moderation Service independently of what information is visible to an individual player.
+
+##### `ServerRulesService.EvaluateApplicant`
+
 ```proto
-rpc EvaluateApplicant (EvaluateApplicantRequest) returns (EvaluateApplicantResponse);
+rpc EvaluateApplicant (EvaluateApplicantRequest)
+    returns (EvaluateApplicantResponse);
+
 message EvaluateApplicantRequest {
   string applicant_id = 1;
   string university_status = 2;
@@ -945,68 +1186,460 @@ message EvaluateApplicantRequest {
   bool credentials_valid = 5;
   bool previously_banned = 6;
 }
+
 message EvaluateApplicantResponse {
-  string expected_verdict = 1;   // "accept" | "reject" | "flag" | "ban"
+  string expected_verdict = 1;
   repeated string violated_rule_ids = 2;
 }
 ```
-`EvaluateApplicantRequest` is assembled by Moderation Service from the three responses above — Server Rules Service never fetches applicant data itself.
 
-**Events published (RabbitMQ)**
+`expected_verdict` must contain one of:
 
-`decision_made` - published after each verdict.
+```text
+accept | reject | flag | ban
+```
+
+`EvaluateApplicantRequest` is assembled by the Moderation Service using information obtained from the Applicant, Credential, and University Record services.
+
+The Server Rules Service determines the expected verdict and violated rules. It does not fetch the applicant data itself.
+
+For Lab 1, all four gRPC dependencies are represented by mock implementations.
+
+#### RabbitMQ Events
+
+##### `decision_made`
+
+A `decision_made` event is published after a new moderation decision has been successfully persisted.
+
 ```json
 {
   "session_id": "uuid",
   "applicant_id": "uuid",
-  "verdict": "accept | reject | flag | ban",
+  "verdict": "accept",
   "correct": true,
   "penalty": 0
 }
 ```
-Consumed by Server Moderation Session Service to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next `GetNextApplicant` call.
+
+The event allows other services, particularly the Server Moderation Session Service, to react to the result of a moderation decision without creating a synchronous dependency on the Moderation Service.
+
+For Lab 1, event publishing is represented by a mock publisher. RabbitMQ integration will replace this mock during service integration.
+
+#### Persistence
+
+The Moderation Service owns its PostgreSQL database.
+
+The main entities are:
+
+- `decisions` - stores the moderator verdict, correctness, penalty, applicant, session, and moderator
+- `decision_violations` - stores rule IDs violated by the applicant for a decision
+
+A decision may contain multiple violated rules.
+
+Deleting a decision also removes its associated violation records.
+
+No other microservice directly accesses the Moderation Service database.
+
+#### Postman Collection
+
+The REST API can be tested using:
+
+```text
+postman/pad-team-17-pair4-moderation.postman_collection.json
+```
+
+The collection uses variables for:
+
+- `base_url`
+- `session_id`
+- `applicant_id`
+- `decision_id`
+
+The `decision_id` variable is automatically populated after a decision is successfully created.
+
+The collection covers:
+
+- Creating a moderation decision
+- Retrieving all decisions
+- Retrieving a decision by ID
+- Updating a decision and verifying recalculation
+- Rejecting an invalid verdict
+- Rejecting modifications to protected fields
+- Rejecting duplicate decisions
+- Retrieving a nonexistent decision
+- Deleting a decision
+- Verifying that a deleted decision returns `404`
+
+Run the requests in their numbered order for the complete workflow.
+
+#### Current Lab 1 Limitations
+
+The external service dependencies are currently represented by mocks rather than real gRPC clients.
+
+The `decision_made` publisher is currently a mock rather than a RabbitMQ publisher.
+
+Moderator identity is also mocked for Lab 1. Once authentication is integrated, the moderator identity should be obtained from the authenticated JWT rather than from a development/mock identity.
+
+The service interfaces and publisher abstraction are intentionally separated from the decision logic so these mocks can later be replaced by the real infrastructure integrations.
 
 ---
 
 ### Discord DMs Service
 
-**Client-facing REST (via API Gateway)**
+The Discord DMs Service manages communication between moderators and junior moderators during a moderation session. It owns communication channels, channel membership, and messages.
 
-`GET /sessions/{session_id}/channels` - list channels for a session and who can access each
+The service provides REST endpoints for channel and message management and uses Socket.IO for real-time communication. Channel and message data is persisted in PostgreSQL.
+
+The service transports messages between players but does not determine whether the information contained in a message is correct.
+
+#### Requirements
+
+To run the service locally, the following software is required:
+
+- Node.js 24+
+- npm
+- PostgreSQL 16+
+
+Alternatively, Docker can be used to run both the service and its PostgreSQL database:
+
+- Docker
+- Docker Compose
+
+The service uses the following main technologies:
+
+- TypeScript
+- NestJS
+- TypeORM
+- PostgreSQL
+- Socket.IO
+
+Create a `.env` file based on `.env.example`:
+
+```env
+PORT=3000
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=discord_dms
+DB_PASSWORD=change_me
+DB_DATABASE=discord_dms
+```
+
+For local development, install the dependencies and start the service:
+
+```bash
+npm install
+npm run start:dev
+```
+
+When running locally, the Discord DMs Service is available at:
+
+```text
+http://localhost:3000
+```
+
+#### Running with Docker
+
+The recommended way to run the complete service is with Docker Compose:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+The Discord DMs Service runs on port `3000` inside its container and is exposed on the host at:
+
+```text
+http://localhost:8086
+```
+
+The deployment also starts the PostgreSQL database used by the Discord DMs Service.
+
+The published Docker image is:
+
+```text
+dannacojocari/discord-dms-service:0.3.0
+```
+
+The image supports:
+
+```text
+linux/amd64
+linux/arm64
+```
+
+PostgreSQL data is stored in a persistent Docker volume.
+
+To check the containers:
+
+```bash
+docker compose -f deploy/docker-compose.yml ps
+```
+
+To stop the service:
+
+```bash
+docker compose -f deploy/docker-compose.yml down
+```
+
+#### Communication
+
+The Discord DMs Service uses different communication mechanisms depending on the operation.
+
+**REST**
+
+REST is used for channel and message management and for triggering session channel provisioning during Lab 1.
+
+**WebSocket / Socket.IO**
+
+Socket.IO is used for real-time communication between players.
+
+Supported client events:
+
+- `join_channel`
+- `send_message`
+
+Supported server events:
+
+- `message`
+- `error`
+
+**gRPC / Session Service Integration**
+
+The Discord DMs Service depends on session and player-assignment information to determine which players should have access to each communication channel.
+
+The integration is represented by a `SessionClient` abstraction. For Lab 1, the real Session Service gRPC integration is not yet available, so the service uses `MockSessionClient`.
+
+The mocked Session Service returns:
+
+- `session_id`
+- players belonging to the session
+- each player's role
+- each player's scopes
+
+The currently agreed player scopes are:
+
+```text
+enrollment
+courses
+schedule
+messages
+```
+
+The Lab 1 implementation maps these scopes to Discord channels:
+
+```text
+enrollment -> enrollment-check
+courses    -> course-registration
+schedule   -> schedule-check
+messages   -> general-mod-chat
+```
+
+Channel membership is generated from the scopes assigned to each player.
+
+The mock is isolated behind the `SessionClient` interface so that it can later be replaced by a real gRPC implementation without changing the channel provisioning logic.
+
+**RabbitMQ**
+
+The current Discord DMs Service does not publish or consume RabbitMQ events.
+
+Real-time player messages are transported directly through Socket.IO and persisted in PostgreSQL. The service does not determine whether message contents are correct and currently has no asynchronous domain events that require RabbitMQ.
+
+#### Channels REST API
+
+`POST /channels` - create a channel and optionally assign players
+
 ```json
-// Response 200
 {
-  "channels": [
-    { "channel_id": "uuid", "name": "string", "allowed_player_ids": ["uuid"] }
-  ]
+  "session_id": "uuid",
+  "name": "general-mod-chat",
+  "player_ids": ["uuid"]
 }
 ```
 
-**WebSocket protocol (Socket.IO, connect with `Authorization: Bearer <JWT>`)**
+`GET /channels` - list all channels
 
-Client → server, `join_channel`
+`GET /channels/{channel_id}` - retrieve a specific channel
+
+`GET /sessions/{session_id}/channels` - list channels belonging to a session
+
+`POST /sessions/{session_id}/channels/provision` - provision channels and memberships using session player scopes
+
+The provisioning operation obtains session information through the `SessionClient` abstraction. In Lab 1, this information is supplied by `MockSessionClient`.
+
+For example, if a player has:
+
 ```json
-{ "channel_id": "uuid" }
+{
+  "player_id": "uuid",
+  "role": "test_junior_moderator",
+  "scopes": ["enrollment", "messages"]
+}
 ```
 
-Client → server, `send_message`
-```json
-{ "channel_id": "uuid", "text": "string" }
+the player is assigned to:
+
+```text
+enrollment-check
+general-mod-chat
 ```
 
-Server → client, `message`
+Provisioning is idempotent. Calling the endpoint again for the same session updates the existing channel memberships instead of creating duplicate channels.
+
+`PATCH /channels/{channel_id}` - update a channel
+
 ```json
-{ "channel_id": "uuid", "author_id": "uuid", "text": "string", "sent_at": "RFC3339" }
+{
+  "name": "faculty-check",
+  "player_ids": ["uuid"]
+}
 ```
 
-Server → client, `error`
+`DELETE /channels/{channel_id}` - delete a channel
+
+Channel responses use the following format:
+
 ```json
-{ "error": { "code": "CHANNEL_NOT_ALLOWED", "message": "human text" } }
+{
+  "id": "uuid",
+  "session_id": "uuid",
+  "name": "string",
+  "player_ids": ["uuid"],
+  "created_at": "RFC3339",
+  "updated_at": "RFC3339"
+}
 ```
 
-Room membership is checked against `allowed_player_ids` (received from Session Service via `ProvisionChannels`) at `join_channel` time — a player never receives messages for a channel they weren't granted.
+#### Messages REST API
 
-No RabbitMQ events — the service only transports messages, it doesn't react to anything asynchronously.
+`POST /channels/{channel_id}/messages` - create a message
+
+```json
+{
+  "sender_id": "uuid",
+  "content": "string"
+}
+```
+
+`GET /channels/{channel_id}/messages` - list messages in a channel
+
+`GET /channels/{channel_id}/messages/{message_id}` - retrieve a specific message
+
+`PATCH /channels/{channel_id}/messages/{message_id}` - update message content
+
+```json
+{
+  "content": "updated message"
+}
+```
+
+`DELETE /channels/{channel_id}/messages/{message_id}` - delete a message
+
+Message responses use the following format:
+
+```json
+{
+  "id": "uuid",
+  "channel_id": "uuid",
+  "sender_id": "uuid",
+  "content": "string",
+  "created_at": "RFC3339",
+  "updated_at": "RFC3339"
+}
+```
+
+#### WebSocket Protocol
+
+Real-time communication uses Socket.IO.
+
+Client → server, `join_channel`:
+
+```json
+{
+  "channel_id": "uuid",
+  "player_id": "uuid"
+}
+```
+
+The service verifies that the channel exists and that the player is a member of the channel before joining the corresponding Socket.IO room.
+
+Client → server, `send_message`:
+
+```json
+{
+  "channel_id": "uuid",
+  "sender_id": "uuid",
+  "content": "string"
+}
+```
+
+The sender must be a channel member and the socket must have previously joined that channel.
+
+Messages sent through Socket.IO are persisted using the same message service used by the REST API before they are broadcast.
+
+Server → client, `message`:
+
+```json
+{
+  "id": "uuid",
+  "channel_id": "uuid",
+  "sender_id": "uuid",
+  "content": "string",
+  "created_at": "RFC3339",
+  "updated_at": "RFC3339"
+}
+```
+
+Server → client, `error`:
+
+```json
+{
+  "message": "human-readable error"
+}
+```
+
+#### Persistence
+
+The service owns its PostgreSQL database.
+
+The main entities are:
+
+- `channels` - channels associated with moderation sessions
+- `channel_members` - players that have access to channels
+- `messages` - messages sent in channels
+
+Deleting a channel also removes its memberships and messages.
+
+Channel names are unique within a session. Session provisioning reuses existing channels and synchronizes their memberships rather than creating duplicates.
+
+No other microservice directly accesses the Discord DMs database.
+
+#### Postman Collection
+
+The REST API can be tested using:
+
+```text
+postman/pad-team-17-pair4-discord-dms.postman_collection.json
+```
+
+The collection contains requests for:
+
+- Channel CRUD
+- Session channel lookup
+- Session channel provisioning
+- Message CRUD
+
+The `Provision Session Channels` request verifies that the mocked Session Service information produces the expected channels.
+
+#### Current Lab 1 Limitations
+
+Authentication between the client and Discord DMs is not yet integrated. For Lab 1, player identity is supplied in the WebSocket payload.
+
+JWT authentication should later provide the authenticated player identity instead of trusting `player_id` or `sender_id` supplied by the client.
+
+The Session Service integration currently uses `MockSessionClient`. The mock provides session players, roles, and scopes so that channel provisioning can be implemented and tested independently while the real Session Service integration is unavailable.
+
+The mock will later be replaced by a gRPC client implementing the same `SessionClient` abstraction.
+
+The current scope-to-channel mapping is part of the Lab 1 implementation and can be revised when the final inter-service contract and channel configuration rules are integrated.
 
 ## GitHub Workflow
 
@@ -1059,15 +1692,6 @@ Every PR states:
 4. **Linked task** from the project board
 
 A PR touching a service someone else owns needs that owner's approval, not just any.
-
-### Test coverage
-
-No code exists yet, so nothing is enforced at Lab 0. From Lab 1:
-
-- unit tests for business logic — validation rules, rule evaluation, deception generation
-- integration tests for every endpoint listed in the communication contract
-- target **60% line coverage** per service; a PR that lowers coverage explains why
-- the test command runs in the service's Dockerfile build, so a broken test fails the image
 
 ### Versioning
 
