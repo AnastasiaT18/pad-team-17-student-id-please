@@ -1,0 +1,238 @@
+{
+  "info": {
+    "_postman_id": "5f3d8076-a6f3-4577-997d-387626e32620",
+    "name": "Server Rules Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "50442487",
+    "_collection_link": "https://go.postman.co/collection/50442487-5f3d8076-a6f3-4577-997d-387626e32620?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Get Rules",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('response has a rules array', () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body).to.have.property('rules');",
+              "  pm.expect(body.rules).to.be.an('array');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Replace Rules",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('returned rules have generated rule_id and match input', () => {",
+              "  pm.expect(body.rules).to.have.lengthOf(1);",
+              "  pm.expect(body.rules[0]).to.have.property('rule_id');",
+              "  pm.expect(body.rules[0].description).to.eql('Only FAF students');",
+              "  pm.expect(body.rules[0].condition).to.eql('university_status != faf_student');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"rules\": [\n    { \"description\": \"Only FAF students\", \"condition\": \"university_status != faf_student\" }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        },
+        "description": "Replaces the entire active rule set. Note: this wipes the previous rules, so run 'Get Rules' before this if you want to see the prior state."
+      },
+      "response": []
+    },
+    {
+      "name": "Replace Rules - missing condition (422)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+              "pm.test('error code is VALIDATION_FAILED', () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"rules\": [\n    { \"description\": \"Only FAF students\" }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Replace Rules - rules field missing (422)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+              "pm.test('error code is VALIDATION_FAILED', () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Replace Rules - malformed JSON (400)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+              "pm.test('error code is VALIDATION_FAILED', () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"rules\": [\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "server_rules_url",
+      "value": "http://localhost:8083"
+    }
+  ]
+}
