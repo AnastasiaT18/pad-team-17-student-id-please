@@ -7,8 +7,8 @@
 #   cp .env.example .env    # then fill in the passwords
 #   docker compose up -d
 #
-# Each service owns its own schema and applies it with Flyway on startup, so the database
-# containers start empty on purpose. The same SQL is mirrored under ../db for reading.
+# Each service owns its own database and creates its schema when it starts, so the database
+# containers start empty on purpose.
 #
 # Services not yet published by their owners are commented out. Uncomment as they appear.
 
@@ -135,7 +135,7 @@ services:
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: ${DOCKERHUB_USER}/pad-17-applicant-service:${APPLICANT_VERSION:-0.1.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-0.3.0}
     container_name: pad17-applicant-service
     environment:
       DB_HOST: applicant-db
@@ -157,7 +157,7 @@ services:
         condition: service_healthy
 
   credential-service:
-    image: ${DOCKERHUB_USER}/pad-17-credential-service:${CREDENTIAL_VERSION:-0.1.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-0.3.0}
     container_name: pad17-credential-service
     environment:
       DB_HOST: credential-db

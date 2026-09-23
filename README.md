@@ -423,8 +423,10 @@ advantage. Correctness is decided by Server Rules Service from the claim, the do
 records — never from `deception` itself.
 
 
-**Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
-has already ended.
+**Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
+is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
+it is not running. The session check is served by a mock until Server Moderation Session Service
+exists - see "Running this service" below.
 
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
@@ -441,7 +443,44 @@ has already ended.
 }
 ```
 
-**Errors:** `404 APPLICANT_NOT_FOUND`.
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
+
+`GET /applicants?session_id={session_id}` - every applicant, or only those of one shift, oldest first
+```json
+// Response 200
+[ { "applicant_id": "uuid", "name": "string", "student_id": "string", "...": "as above" } ]
+```
+
+`PATCH /applicants/{applicant_id}` - the applicant amends their claim
+
+Any subset of the claimed fields; whatever is left out stays as it was. Only the claim moves:
+`student_id` is the card the applicant is holding and `deception` is what the documents and records
+were generated from, so neither can be rewritten. The documents and records keep describing what
+the applicant presented on arrival, which is what makes a changed story suspicious. Nothing is
+published - the claim is Applicant Service's alone.
+```json
+// Request - every field optional
+{
+  "name": "string",
+  "major": "string",
+  "year": 1,
+  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
+  "courses": ["string"],
+  "role": "string"
+}
+
+// Response 200 - the amended profile, same shape as GET
+```
+**Errors:** `422 VALIDATION_FAILED` if no field is given, if `year` is outside 1-6, if a text field is
+blank, or if the body tries to change `student_id`, `applicant_id` or `session_id`;
+`400 VALIDATION_FAILED` if the body is not valid JSON; `404 APPLICANT_NOT_FOUND`;
+`409 SESSION_NOT_ACTIVE` if the applicant's shift is no longer running.
+
+`DELETE /applicants/{applicant_id}` - removes the applicant
+```json
+// Response 204 - no body
+```
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
 **Incoming gRPC**
 
@@ -517,9 +556,13 @@ for this applicant, so all three stay in sync.
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "enrollment_status": "string",
   "academic_year": 0,
-  "courses": ["string"]
+  "courses": ["string"],
+  "previously_banned": false
 }
 ```
 
@@ -527,6 +570,29 @@ Applicant Service builds its profile from whichever of these arrives, if it wasn
 initialized the applicant itself, and takes `deception` from that event rather than deciding its
 own. That is what keeps the claim, the documents and the records describing the same lie.
 Idempotent on `applicant_id` — an applicant is only initialized once, however many of the events arrive.
+
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.3.0`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+   - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+
+**Ports:** `8081` (REST)
+
+**DockerHub:** `kutulin/pad-17-applicant-service:0.3.0` (public)
+
+**Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
+
+**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
+
+**Source code / build details:** private repo `pad-team-17-applicant-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
 
 ---
 
@@ -551,8 +617,10 @@ first of the three applicant-side services to be contacted. It mints the `applic
 }
 ```
 
-**Errors:** `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if it
-has already ended.
+**Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
+is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
+it is not running. The session check is served by a mock until Server Moderation Session Service
+exists - see "Running this service" below.
 
 `GET /credentials/{applicant_id}` - fetch an applicant's credentials and their validity
 ```json
@@ -566,7 +634,40 @@ has already ended.
 }
 ```
 
-**Errors:** `404 APPLICANT_NOT_FOUND` if no credentials exist for that applicant.
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND` if no
+credentials exist for that applicant.
+
+`GET /credentials` - every document set Credential Service holds
+```json
+// Response 200
+[ { "applicant_id": "uuid", "student_id_doc": { "valid": true, "issue": "none" }, "...": "as above" } ]
+```
+
+`PATCH /credentials/{applicant_id}` - the applicant hands in corrected documents
+
+Only the self-reported documents can be handed in again: `university_email` and
+`course_registration`. The student ID card and the enrollment confirmation cannot, and neither can
+their verdicts - a verdict is this service's finding, never client input. A corrected mailbox does
+not un-forge a forged card, and an expired confirmation stays expired. Nothing is published.
+```json
+// Request - every field optional
+{
+  "university_email": "string",
+  "course_registration": ["string"]
+}
+
+// Response 200 - the documents after resubmission, same shape as GET
+```
+**Errors:** `422 VALIDATION_FAILED` if no field is given, if `university_email` is not an email
+address, if `course_registration` is empty, or if the body tries to set `student_id_doc`,
+`enrollment_confirmation` or `applicant_id`; `400 VALIDATION_FAILED` if the body is not valid JSON;
+`404 APPLICANT_NOT_FOUND`.
+
+`DELETE /credentials/{applicant_id}` - removes the document set
+```json
+// Response 204 - no body
+```
+**Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
 **Incoming gRPC**
 
@@ -631,15 +732,42 @@ applicant.
 ```json
 {
   "applicant_id": "uuid",
+  "deception": "none | false_major | false_year | impersonation | expired_status",
+  "name": "string",
+  "student_id": "string",
   "enrollment_status": "string",
   "academic_year": 0,
-  "courses": ["string"]
+  "courses": ["string"],
+  "previously_banned": false
 }
 ```
 Credential Service builds its documents from whichever event arrives, if it wasn't the one that
 initialized the applicant itself, and forges them according to that event's `deception` — so a
 document contradicts the records in a specific, discoverable way instead of at random.
 Idempotent on `applicant_id`.
+
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.3.0`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
+   - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+
+**Ports:** `8082` (REST)
+
+**DockerHub:** `kutulin/pad-17-credential-service:0.3.0` (public)
+
+**Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
+
+**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
+
+**Source code / build details:** private repo `pad-team-17-credential-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
 
 ---
 ### Server Rules Service
@@ -716,7 +844,7 @@ No events published or consumed — Server Rules Service doesn't participate in 
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
-3. Run via the team's `docker-compose.yml` (see `/deployment` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
 
 **Ports:** `8080` (REST), `9090` (gRPC)
 
@@ -857,7 +985,7 @@ Not yet consuming `decision_made` (see Moderation Service below) — planned for
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
    - `JWT_SECRET`
-3. Run via the team's `docker-compose.yml` (see `/deployment` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8080` (REST), `9090` (gRPC)
 
