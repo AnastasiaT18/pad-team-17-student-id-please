@@ -1,0 +1,351 @@
+{
+  "info": {
+    "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
+    "name": "Discord DMs Service",
+    "description": "Postman collection for the Discord DMs Service API, including mocked Session Service channel provisioning.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8086"
+    },
+    {
+      "key": "session_id",
+      "value": "750e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "key": "player_id",
+      "value": "550e8400-e29b-41d4-a716-446655440001"
+    },
+    {
+      "key": "channel_id",
+      "value": ""
+    },
+    {
+      "key": "message_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Channels",
+      "item": [
+        {
+          "name": "Create Channel",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('channel_id', response.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"name\": \"general-mod-chat\",\n  \"player_ids\": [\n    \"{{player_id}}\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get All Channels",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Channel",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Session Channels",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "channels"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Provision Session Channels",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Four channels are provisioned', function () {",
+                  "    const channels = pm.response.json();",
+                  "",
+                  "    pm.expect(channels).to.be.an('array');",
+                  "    pm.expect(channels).to.have.length(4);",
+                  "});",
+                  "",
+                  "pm.test('Expected channels are present', function () {",
+                  "    const channels = pm.response.json();",
+                  "    const names = channels.map((channel) => channel.name);",
+                  "",
+                  "    pm.expect(names).to.include.members([",
+                  "        'enrollment-check',",
+                  "        'course-registration',",
+                  "        'schedule-check',",
+                  "        'general-mod-chat'",
+                  "    ]);",
+                  "});",
+                  "",
+                  "pm.test('All provisioned channels belong to the session', function () {",
+                  "    const channels = pm.response.json();",
+                  "    const sessionId = pm.collectionVariables.get('session_id');",
+                  "",
+                  "    channels.forEach((channel) => {",
+                  "        pm.expect(channel.session_id).to.eql(sessionId);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/channels/provision",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "channels",
+                "provision"
+              ]
+            },
+            "description": "Provisions Discord channels and memberships for a session using the Lab 1 mocked Session Service client. The operation is idempotent."
+          }
+        },
+        {
+          "name": "Update Channel",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"faculty-check\",\n  \"player_ids\": [\n    \"{{player_id}}\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Channel",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "item": [
+        {
+          "name": "Create Message",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('message_id', response.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sender_id\": \"{{player_id}}\",\n  \"content\": \"Applicant enrollment has been verified.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get All Messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Message",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages/{{message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages",
+                "{{message_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Message",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Applicant enrollment has been verified and confirmed.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages/{{message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages",
+                "{{message_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Message",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages/{{message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages",
+                "{{message_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
