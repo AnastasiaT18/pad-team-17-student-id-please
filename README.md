@@ -159,31 +159,29 @@ Data lives in one database per service. Services never touch each other's tables
 
 ### Player Service
 
-**Client-facing REST (via API Gateway)**
-
 `POST /players` - register a new player account
 ```json
 // Request
 { "username": "string", "email": "string", "password": "string" }
-
+ 
 // Response 201
 { "player_id": "uuid", "username": "string", "email": "string", "xp": 0, "level": 1, "created_at": "RFC3339" }
 ```
-
+ 
 **Errors:** `422 VALIDATION_FAILED` if username, email, or password is missing or malformed, `409 EMAIL_ALREADY_REGISTERED` if the email is already in use.
-
+ 
 `POST /players/login` - authenticate
 ```json
 // Request
 { "email": "string", "password": "string" }
-
+ 
 // Response 200
 { "player_id": "uuid", "token": "jwt string" }
 ```
-
+ 
 **Errors:** `401 INVALID_CREDENTIALS` if the email/password combination is wrong.
-
-
+ 
+ 
 `GET /players/{player_id}` - fetch profile
 ```json
 // Response 200
@@ -197,15 +195,15 @@ Data lives in one database per service. Services never touch each other's tables
   "disciplinary_actions": 0
 }
 ```
-
+ 
 **Errors:** `404 PLAYER_NOT_FOUND`.
-
-
-`PATCH /players/{player_id}` - update profile fields
+ 
+ 
+`PATCH /players/{player_id}` - update profile fields (requires auth; caller must be this player)
 ```json
 // Request (any subset)
 { "username": "string", "email": "string" }
-
+ 
 // Response 200
 {
   "player_id": "uuid",
@@ -217,33 +215,62 @@ Data lives in one database per service. Services never touch each other's tables
   "disciplinary_actions": 0
 }
 ```
-
+ 
 **Errors:** `422 VALIDATION_FAILED` if a field is malformed, `403 FORBIDDEN` if the caller isn't this player, `404 PLAYER_NOT_FOUND`.
-
-
+ 
+ 
 `GET /players/{player_id}/friends` - list a player's friends
 ```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
 ```
-
+ 
 **Errors:** `404 PLAYER_NOT_FOUND`.
-
-
-`POST /players/{player_id}/friends` - add another player as a friend
+ 
+ 
+`POST /players/{player_id}/friends` - send a friend request (requires auth; caller must be this player)
 ```json
 // Request
 { "friend_id": "uuid" }
-
+ 
+// Response 200
+{ "request_id": "uuid", "friend_id": "uuid", "status": "pending" }
+```
+ 
+If `friend_id` had already sent a pending request to the caller, that request is accepted
+immediately instead, and the response comes back with `"status": "accepted"`.
+ 
+**Errors:** `403 FORBIDDEN` if the caller isn't `player_id`, `422 VALIDATION_FAILED` if `friend_id` equals the caller's own id, `404 PLAYER_NOT_FOUND` if `friend_id` doesn't exist, `409 ALREADY_FRIENDS` if the friendship already exists, `409 FRIEND_REQUEST_ALREADY_SENT` if the caller already has a pending request to this player.
+ 
+ 
+`GET /players/{player_id}/friend-requests` - list a player's incoming friend requests (requires auth; caller must be this player)
+```json
+// Response 200
+{ "requests": [ { "request_id": "uuid", "player_id": "uuid", "username": "string" } ] }
+```
+ 
+**Errors:** `403 FORBIDDEN` if the caller isn't `player_id`.
+ 
+ 
+`POST /friend-requests/{request_id}/accept` - accept an incoming friend request (requires auth; caller must be the request's addressee)
+```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
 ```
-
-**Errors:** `404 PLAYER_NOT_FOUND` if `friend_id` doesn't exist, `409 ALREADY_FRIENDS` if the friendship already exists.
-
-
+ 
+**Errors:** `404 FRIEND_REQUEST_NOT_FOUND` if the request doesn't exist, isn't pending, or doesn't belong to the caller.
+ 
+ 
+`DELETE /friend-requests/{request_id}` - decline a friend request, or cancel one you sent (requires auth; caller must be the requester or addressee)
+```
+// Response 204, no body
+```
+ 
+**Errors:** `404 FRIEND_REQUEST_NOT_FOUND` if the request doesn't exist or the caller isn't involved in it.
+ 
+ 
 **Events consumed (RabbitMQ)**
-
+ 
 `shift_ended` - published by Session Service when a shift ends.
 ```json
 {
@@ -255,20 +282,60 @@ Data lives in one database per service. Services never touch each other's tables
 ```
 Applied per `player_id` to update `xp`, `level`, `shifts_completed`, `disciplinary_actions`.
 Idempotent on `(session_id, player_id)`.
+ 
+ 
+For Lab 1, the RabbitMQ consumer is not yet wired to a real broker. The event contract and the
+handling logic (`PlayersService.applyShiftEnded`) are implemented and covered by a unit test
+(`players.service.spec.ts`) that drives the method directly with a `shift_ended`-shaped payload,
+since Session Service's own publisher is also mocked for Lab 1.
+ 
+## Persistence
+ 
+The Player Service owns its PostgreSQL database.
+ 
+The main entities are:
+ 
+- `players` - player accounts and profile data
+- `friendships` - friend requests and accepted friendships between players
+- `processed_shifts` - tracks which `(session_id, player_id)` shift results have already been
+  applied, so re-delivery of a `shift_ended` event is a no-op
+No other microservice directly accesses the Player Service database.
 
----
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull janetag/player-service:0.1.0`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - `JWT_SECRET`, `JWT_EXPIRES_IN` — the same `JWT_SECRET` must be used by Server Moderation Session Service and University Record Service, since they only verify tokens this service signs
+   - `PORT` — `3000` inside the container
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+
+**Ports:** `8087` on the host (`3000` inside the container)
+
+**DockerHub:** `janetag/player-service:0.1.0` (public)
+
+**Schema:** created by the service itself at startup, so the database container comes up empty.
+
+**Mocked until the other services exist:** the `shift_ended` consumer is not connected to a real broker yet (see above).
+
+**Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
+
+**Source code / build details:** private repo `pad-team-17-player-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
 ### Server Moderation Session Service
 
 **Client-facing REST (via API Gateway)**
 
+All endpoints require a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or
+invalid token returns `401 UNAUTHORIZED`.
+ 
 `POST /sessions` - create a session
 ```json
 // Response 201
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
 ```
-
-**Errors:** `422 VALIDATION_FAILED` if the request is malformed.
 
 
 `POST /sessions/{session_id}/join` - the calling player (identified via JWT) joins an existing, not-yet-started session as Junior Moderator
@@ -392,6 +459,40 @@ message AssignScopesResponse { bool success = 1; }
 ```
 Applied to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next
 `GetNextApplicant` call.
+
+## Persistence
+
+The Session Service owns its PostgreSQL database.
+
+The main entities are:
+
+- `sessions` - session state: status, moderator, current applicant, processed count, score, timestamps
+- `session_junior_moderators` - which players have joined a session as Junior Moderator, and when
+
+No other microservice directly accesses the Session Service database.
+
+### Running this service
+
+**To run it (no private repo access needed):**
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.1.0`
+   (or let the team's Docker Compose file, in this CPR, pull it for you)
+2. Provide the required environment variables (values shared directly within the team, never committed):
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - `JWT_SECRET` — must match the secret Player Service signs tokens with, since this service only verifies tokens and never issues them
+   - `PORT` — `3001` inside the container
+3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+
+**Ports:** `8088` on the host (`3001` inside the container)
+
+**DockerHub:** `janetag/server-moderation-session-service:0.1.0` (public)
+
+**Schema:** created by the service itself at startup, so the database container comes up empty.
+
+**Mocked until the other services exist:** the RabbitMQ publisher (`shift_ended`) and consumer (`decision_made`), and the outgoing gRPC calls to Applicant, Discord DMs and University Record Services.
+
+**Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
+
+**Source code / build details:** private repo `pad-team-17-server-moderation-session-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
 ### Applicant Service
 
