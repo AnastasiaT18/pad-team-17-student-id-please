@@ -74,7 +74,7 @@ services:
       POSTGRES_USER: ${SERVER_RULES_DB_USER}
       POSTGRES_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
     volumes:
-      - server-rules-db-data:/var/lib/postgresql/data
+      - server-rules-db-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${SERVER_RULES_DB_USER} -d rules_db"]
       interval: 10s
@@ -89,12 +89,48 @@ services:
       POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
       POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
     volumes:
-      - university-record-db-data:/var/lib/postgresql/data
+      - university-record-db-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d record_db"]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  moderation-db:
+    image: postgres:16-alpine
+    container_name: pad17-moderation-db
+    environment:
+      POSTGRES_DB: moderation
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+    volumes:
+      - moderation-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d moderation"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  discord-dms-db:
+    image: postgres:16-alpine
+    container_name: pad17-discord-dms-db
+    environment:
+      POSTGRES_DB: discord_dms
+      POSTGRES_USER: ${DISCORD_DMS_DB_USER}
+      POSTGRES_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+    volumes:
+      - discord-dms-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DISCORD_DMS_DB_USER} -d discord_dms"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------- pair 1 (Janeta)
+  # player-service:
+  #   image: <dockerhub-user>/pad-17-player-service:0.1.0
+  # server-moderation-session-service:
+  #   image: <dockerhub-user>/pad-17-session-service:0.1.0
 
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
@@ -179,16 +215,37 @@ services:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
-  # moderation-service:
-  #   image: <dockerhub-user>/pad-17-moderation-service:0.1.0
-  # discord-dms-service:
-  #   image: <dockerhub-user>/pad-17-discord-dms-service:0.1.0
+  moderation-service:
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-0.2.0}
+    container_name: pad17-moderation-service
+    environment:
+      PORT: 3000
+      DB_HOST: moderation-db
+      DB_PORT: 5432
+      DB_USERNAME: ${MODERATION_DB_USER}
+      DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      DB_DATABASE: moderation
+    ports:
+      - "8085:3000"
+    depends_on:
+      moderation-db:
+        condition: service_healthy
 
-  # ---------------------------------------------------------------- pair 1 (Janeta)
-  # player-service:
-  #   image: <dockerhub-user>/pad-17-player-service:0.1.0
-  # server-moderation-session-service:
-  #   image: <dockerhub-user>/pad-17-session-service:0.1.0
+  discord-dms-service:
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-0.3.0}
+    container_name: pad17-discord-dms-service
+    environment:
+      PORT: 3000
+      DB_HOST: discord-dms-db
+      DB_PORT: 5432
+      DB_USERNAME: ${DISCORD_DMS_DB_USER}
+      DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      DB_DATABASE: discord_dms
+    ports:
+      - "8086:3000"
+    depends_on:
+      discord-dms-db:
+        condition: service_healthy
 
 volumes:
   rabbitmq-data:
@@ -196,3 +253,5 @@ volumes:
   credential-db-data:
   server-rules-db-data:
   university-record-db-data:
+  moderation-db-data:
+  discord-dms-db-data:
