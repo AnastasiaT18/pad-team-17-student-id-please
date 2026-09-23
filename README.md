@@ -587,7 +587,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 
 **DockerHub:** `kutulin/pad-17-applicant-service:0.3.0` (public)
 
-**Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/applicant/` for reading.
+**Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
 **Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
 
@@ -762,7 +762,7 @@ Idempotent on `applicant_id`.
 
 **DockerHub:** `kutulin/pad-17-credential-service:0.3.0` (public)
 
-**Schema:** applied by Flyway at startup, so the database container comes up empty and the service migrates it. The same SQL is mirrored under `db/credential/` for reading.
+**Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
 **Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
 

@@ -7,8 +7,8 @@
 #   cp .env.example .env    # then fill in the passwords
 #   docker compose up -d
 #
-# Each service owns its own schema and applies it with Flyway on startup, so the database
-# containers start empty on purpose. The same SQL is mirrored under ../db for reading.
+# Each service owns its own database and creates its schema when it starts, so the database
+# containers start empty on purpose.
 #
 # Services not yet published by their owners are commented out. Uncomment as they appear.
 
