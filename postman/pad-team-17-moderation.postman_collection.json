@@ -1,0 +1,444 @@
+{
+  "info": {
+    "_postman_id": "d9e58e16-41e1-4f9c-8ec7-moderation-service",
+    "name": "Moderation Service",
+    "description": "Postman collection for the Student ID, please Moderation Service.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8085"
+    },
+    {
+      "key": "session_id",
+      "value": "950e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "key": "applicant_id",
+      "value": "550e8400-e29b-41d4-a716-446655440001"
+    },
+    {
+      "key": "decision_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Create Decision",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"verdict\": \"accept\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sessions",
+            "{{session_id}}",
+            "applicants",
+            "{{applicant_id}}",
+            "decision"
+          ]
+        },
+        "description": "Creates a moderation decision for an applicant."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 201\", function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "pm.collectionVariables.set(\"decision_id\", response.id);",
+              "",
+              "pm.test(\"Decision was created\", function () {",
+              "    pm.expect(response.id).to.exist;",
+              "    pm.expect(response.session_id).to.eql(pm.collectionVariables.get(\"session_id\"));",
+              "    pm.expect(response.applicant_id).to.eql(pm.collectionVariables.get(\"applicant_id\"));",
+              "    pm.expect(response.verdict).to.eql(\"accept\");",
+              "    pm.expect(response.correct).to.eql(true);",
+              "    pm.expect(response.penalty).to.eql(0);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Get All Decisions",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/decisions",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions"
+          ]
+        },
+        "description": "Returns all persisted moderation decisions."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Response is an array\", function () {",
+              "    pm.expect(pm.response.json()).to.be.an(\"array\");",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Get Decision By ID",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/decisions/{{decision_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "{{decision_id}}"
+          ]
+        },
+        "description": "Returns one moderation decision."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test(\"Correct decision returned\", function () {",
+              "    pm.expect(response.id).to.eql(pm.collectionVariables.get(\"decision_id\"));",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Update Decision",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"verdict\": \"ban\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/decisions/{{decision_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "{{decision_id}}"
+          ]
+        },
+        "description": "Updates the submitted verdict. Correctness and penalty are recalculated by the service."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "const response = pm.response.json();",
+              "",
+              "pm.test(\"Verdict was updated and recalculated\", function () {",
+              "    pm.expect(response.id).to.eql(pm.collectionVariables.get(\"decision_id\"));",
+              "    pm.expect(response.verdict).to.eql(\"ban\");",
+              "    pm.expect(response.correct).to.eql(false);",
+              "    pm.expect(response.penalty).to.eql(3);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Invalid Verdict",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"verdict\": \"maybe\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/decisions/{{decision_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "{{decision_id}}"
+          ]
+        },
+        "description": "Verifies validation rejects unsupported verdict values."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 400\", function () {",
+              "    pm.response.to.have.status(400);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Protected Field Modification",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"verdict\": \"accept\",\n  \"penalty\": 0\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/decisions/{{decision_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "{{decision_id}}"
+          ]
+        },
+        "description": "Verifies that server-calculated fields such as penalty cannot be modified by the client."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 400\", function () {",
+              "    pm.response.to.have.status(400);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Duplicate Decision",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"verdict\": \"accept\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sessions",
+            "{{session_id}}",
+            "applicants",
+            "{{applicant_id}}",
+            "decision"
+          ]
+        },
+        "description": "Attempts to create a second decision for the same session and applicant."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 409\", function () {",
+              "    pm.response.to.have.status(409);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Get Nonexistent Decision",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/decisions/11111111-1111-4111-8111-111111111111",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "11111111-1111-4111-8111-111111111111"
+          ]
+        },
+        "description": "Verifies that an unknown decision returns 404."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 404\", function () {",
+              "    pm.response.to.have.status(404);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Delete Decision",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/decisions/{{decision_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "{{decision_id}}"
+          ]
+        },
+        "description": "Deletes the moderation decision."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 204\", function () {",
+              "    pm.response.to.have.status(204);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Verify Deleted Decision",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/decisions/{{decision_id}}",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "decisions",
+            "{{decision_id}}"
+          ]
+        },
+        "description": "Verifies that the deleted decision can no longer be retrieved."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 404\", function () {",
+              "    pm.response.to.have.status(404);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ]
+}

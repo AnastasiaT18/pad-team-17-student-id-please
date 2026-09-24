@@ -1,0 +1,319 @@
+# Team 17 - "Student ID, please"
+#
+# Runs the team's services from the images published on Docker Hub. It never builds from a
+# Dockerfile: nobody is a collaborator on anybody else's private repository, so building locally is
+# impossible for everyone except the owner of each service.
+#
+#   cp .env.example .env    # then fill in the passwords
+#   docker compose up -d
+#
+# Each service owns its own database and creates its schema when it starts, so the database
+# containers start empty on purpose.
+#
+# Services not yet published by their owners are commented out. Uncomment as they appear.
+
+name: pad-team-17
+
+services:
+
+  # ---------------------------------------------------------------- infrastructure
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: pad17-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  player-db:
+    image: postgres:17-alpine
+    container_name: pad17-player-db
+    environment:
+      POSTGRES_DB: player
+      POSTGRES_USER: ${PLAYER_DB_USER}
+      POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
+    volumes:
+      - player-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PLAYER_DB_USER} -d player"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+ 
+  server-moderation-session-db:
+    image: postgres:17-alpine
+    container_name: pad17-server-moderation-session-db
+    environment:
+      POSTGRES_DB: server_moderation_session
+      POSTGRES_USER: ${SERVER_MODERATION_SESSION_DB_USER}
+      POSTGRES_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
+    volumes:
+      - server-moderation-session-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SERVER_MODERATION_SESSION_DB_USER} -d server_moderation_session"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  applicant-db:
+    image: postgres:16-alpine
+    container_name: pad17-applicant-db
+    environment:
+      POSTGRES_DB: applicant
+      POSTGRES_USER: ${APPLICANT_DB_USER}
+      POSTGRES_PASSWORD: ${APPLICANT_DB_PASSWORD}
+    volumes:
+      # Named volume: the data outlives `docker compose down`.
+      - applicant-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${APPLICANT_DB_USER} -d applicant"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  credential-db:
+    image: postgres:16-alpine
+    container_name: pad17-credential-db
+    environment:
+      POSTGRES_DB: credential
+      POSTGRES_USER: ${CREDENTIAL_DB_USER}
+      POSTGRES_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+    volumes:
+      - credential-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CREDENTIAL_DB_USER} -d credential"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  server-rules-db:
+    image: postgres:18
+    container_name: pad17-server-rules-db
+    environment:
+      POSTGRES_DB: rules_db
+      POSTGRES_USER: ${SERVER_RULES_DB_USER}
+      POSTGRES_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
+    volumes:
+      - server-rules-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SERVER_RULES_DB_USER} -d rules_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  university-record-db:
+    image: postgres:18
+    container_name: pad17-university-record-db
+    environment:
+      POSTGRES_DB: record_db
+      POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
+      POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+    volumes:
+      - university-record-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d record_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  moderation-db:
+    image: postgres:16-alpine
+    container_name: pad17-moderation-db
+    environment:
+      POSTGRES_DB: moderation
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+    volumes:
+      - moderation-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d moderation"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  discord-dms-db:
+    image: postgres:16-alpine
+    container_name: pad17-discord-dms-db
+    environment:
+      POSTGRES_DB: discord_dms
+      POSTGRES_USER: ${DISCORD_DMS_DB_USER}
+      POSTGRES_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+    volumes:
+      - discord-dms-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DISCORD_DMS_DB_USER} -d discord_dms"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------- pair 1 (Janeta)
+  player-service:
+    image: janetag/player-service:${PLAYER_VERSION:-0.1.1}
+    container_name: pad17-player-service
+    environment:
+      DB_HOST: player-db
+      DB_PORT: 5432
+      DB_NAME: player
+      DB_USER: ${PLAYER_DB_USER}
+      DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: 1h
+      PORT: 3000
+    ports:
+      - "8087:3000"
+    depends_on:
+      player-db:
+        condition: service_healthy
+ 
+  server-moderation-session-service:
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.1.1}
+    container_name: pad17-server-moderation-session-service
+    environment:
+      DB_HOST: server-moderation-session-db
+      DB_PORT: 5432
+      DB_NAME: server_moderation_session
+      DB_USER: ${SERVER_MODERATION_SESSION_DB_USER}
+      DB_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: 3001
+    ports:
+      - "8088:3001"
+    depends_on:
+      server-moderation-session-db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- pair 2 (Catalin)
+
+  applicant-service:
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-0.3.0}
+    container_name: pad17-applicant-service
+    environment:
+      DB_HOST: applicant-db
+      DB_PORT: 5432
+      DB_NAME: applicant
+      DB_USER: ${APPLICANT_DB_USER}
+      DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      SERVER_PORT: 8081
+    ports:
+      - "8081:8081"
+    depends_on:
+      applicant-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  credential-service:
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-0.3.0}
+    container_name: pad17-credential-service
+    environment:
+      DB_HOST: credential-db
+      DB_PORT: 5432
+      DB_NAME: credential
+      DB_USER: ${CREDENTIAL_DB_USER}
+      DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      SERVER_PORT: 8082
+    ports:
+      - "8082:8082"
+    depends_on:
+      credential-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- pair 3 (Anastasia)
+  server-rules-service:
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.1.1}
+    container_name: pad17-server-rules-service
+    environment:
+      DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
+      DB_USERNAME: ${SERVER_RULES_DB_USER}
+      DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
+    ports:
+      - "8083:8080"
+      - "9091:9090"
+    depends_on:
+      server-rules-db:
+        condition: service_healthy
+
+  university-record-service:
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.1.1}
+    container_name: pad17-university-record-service
+    environment:
+      DB_URL: jdbc:postgresql://university-record-db:5432/record_db
+      DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
+      DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "8084:8080"
+      - "9092:9090"
+    depends_on:
+      university-record-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------- pair 4 (Daniela)
+  moderation-service:
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-0.2.0}
+    container_name: pad17-moderation-service
+    environment:
+      PORT: 3000
+      DB_HOST: moderation-db
+      DB_PORT: 5432
+      DB_USERNAME: ${MODERATION_DB_USER}
+      DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      DB_DATABASE: moderation
+    ports:
+      - "8085:3000"
+    depends_on:
+      moderation-db:
+        condition: service_healthy
+
+  discord-dms-service:
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-0.3.0}
+    container_name: pad17-discord-dms-service
+    environment:
+      PORT: 3000
+      DB_HOST: discord-dms-db
+      DB_PORT: 5432
+      DB_USERNAME: ${DISCORD_DMS_DB_USER}
+      DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      DB_DATABASE: discord_dms
+    ports:
+      - "8086:3000"
+    depends_on:
+      discord-dms-db:
+        condition: service_healthy
+
+volumes:
+  rabbitmq-data:
+  player-db-data:
+  server-moderation-session-db-data:
+  applicant-db-data:
+  credential-db-data:
+  server-rules-db-data:
+  university-record-db-data:
+  moderation-db-data:
+  discord-dms-db-data:
