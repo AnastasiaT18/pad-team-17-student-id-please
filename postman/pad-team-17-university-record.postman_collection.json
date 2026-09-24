@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "8a29138b-ef5c-498e-b463-13ef5d60c5ac",
     "name": "University Record Service",
-    "description": "Before running: this service's GET endpoint needs a player to have an assigned scope in the session. AssignScopes is gRPC only, so run this once via grpcurl before using this collection:\n\ngrpcurl -plaintext -proto src/main/proto/university_record.proto -d '{\"session_id\":\"test-session\",\"assignments\":\\[{\"player_id\":\"player-1\",\"scopes\":\\[\"enrollment\",\"courses\"\\]}\\]}' localhost:9092 UniversityRecordService/AssignScopes\n\nThe collection variable `token_player1` is a hand-built, unsigned JWT with sub=player-1 (signature verification isn't implemented yet, see README). `token_stranger` has sub=someone-never-assigned, used for the 403 case.",
+    "description": "Before running: this service's GET endpoint needs a player to have an assigned scope in the session. AssignScopes is gRPC only, so run this once via grpcurl before using this collection:\n\ngrpcurl -plaintext -proto services/university-record-service/src/main/proto/university_record.proto -d '{\"session_id\":\"test-session\",\"assignments\":\\[{\"player_id\":\"player-1\",\"scopes\":\\[\"enrollment\",\"courses\"\\]}\\]}' localhost:9092 UniversityRecordService/AssignScopes\n\nThe collection variable `token_player1` is a hand-built, unsigned JWT with sub=player-1 (signature verification isn't implemented yet, see README). `token_stranger` has sub=someone-never-assigned, used for the 403 case.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "50442487",
     "_collection_link": "https://go.postman.co/collection/50442487-8a29138b-ef5c-498e-b463-13ef5d60c5ac?source=collection_link"
