@@ -304,7 +304,7 @@ No other microservice directly accesses the Player Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.1.0`
+1. Pull the public image — `docker pull janetag/player-service:0.1.1`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -314,7 +314,7 @@ No other microservice directly accesses the Player Service database.
 
 **Ports:** `8087` on the host (`3000` inside the container)
 
-**DockerHub:** `janetag/player-service:0.1.0` (public)
+**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 
@@ -474,7 +474,7 @@ No other microservice directly accesses the Session Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.1.0`
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.1.1`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -484,7 +484,7 @@ No other microservice directly accesses the Session Service database.
 
 **Ports:** `8088` on the host (`3001` inside the container)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.1.0` (public)
+**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 

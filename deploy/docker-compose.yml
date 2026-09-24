@@ -158,7 +158,7 @@ services:
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-1.0.0}
+    image: janetag/player-service:${PLAYER_VERSION:-0.1.1}
     container_name: pad17-player-service
     environment:
       DB_HOST: player-db
@@ -176,7 +176,7 @@ services:
         condition: service_healthy
  
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-1.0.0}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.1.1}
     container_name: pad17-server-moderation-session-service
     environment:
       DB_HOST: server-moderation-session-db
