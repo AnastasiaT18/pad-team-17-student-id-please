@@ -22,3 +22,6 @@
 [submodule "services/player-service"]
 	path = services/player-service
 	url = https://github.com/janeta1/player-service
+[submodule "services/gateway"]
+	path = services/gateway
+	url = https://github.com/AnastasiaT18/pad-team-17-gateway-service
