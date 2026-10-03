@@ -232,7 +232,7 @@
   "variable": [
     {
       "key": "server_rules_url",
-      "value": "http://localhost:8083"
+      "value": "http://localhost:8090"
     }
   ]
 }

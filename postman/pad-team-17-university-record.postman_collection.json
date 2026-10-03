@@ -282,7 +282,7 @@
   "variable": [
     {
       "key": "university_record_url",
-      "value": "http://localhost:8084"
+      "value": "http://localhost:8090"
     },
     {
       "key": "applicant_id",

@@ -247,7 +247,7 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.1.1}    
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0} 
     container_name: pad17-server-rules-service
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
@@ -260,7 +260,7 @@ services:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.1.1}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.2.0}
     container_name: pad17-university-record-service
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
