@@ -272,7 +272,6 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
     ports:
-      - "8084:8080"
       - "9092:9090"
     depends_on:
       university-record-db:
