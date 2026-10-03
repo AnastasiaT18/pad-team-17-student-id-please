@@ -247,21 +247,20 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.1.1}
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0} 
     container_name: pad17-server-rules-service
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
       DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
     ports:
-      - "8083:8080"
       - "9091:9090"
     depends_on:
       server-rules-db:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.1.1}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.2.0}
     container_name: pad17-university-record-service
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
@@ -273,7 +272,6 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
     ports:
-      - "8084:8080"
       - "9092:9090"
     depends_on:
       university-record-db:
