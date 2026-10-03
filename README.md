@@ -910,6 +910,17 @@ Holds no applicant data — evaluates whatever it's handed, per request.
 { "error": { "code": "VALIDATION_FAILED", "message": "Request body is malformed" } }
 ```
 
+The following two error responses apply to both `GET /rules` and `PUT /rules`:
+ 
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+ 
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+ 
+
 ### Rule condition format
 
 A `condition` string has the shape `<field> <operator> <value>`. **Matching means the applicant violates the rule** — write conditions to describe the disqualifying state, not the allowed one.
@@ -941,15 +952,15 @@ No events published or consumed — Server Rules Service doesn't participate in 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.1.1`
+1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8080` (REST), `9090` (gRPC)
+**Ports:** gRPC on `9091` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/server-rules-service:v0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/server-rules-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -1008,6 +1019,15 @@ Moderation Session Service when the shift starts — and returns only that data.
 wasn't in the session, or has no assignment, gets `403`. This is the actual enforcement point
 for the partitioning promised in Service Boundaries.
 
+The following two error responses apply to both `POST /records` and `GET /sessions/{session_id}/records/{applicant_id}`:
+ 
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+ 
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
 
 **Incoming gRPC (called by Server Moderation Session Service at shift start)**
 
@@ -1080,7 +1100,7 @@ Not yet consuming `decision_made` (see Moderation Service below) — planned for
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.1.1`
+1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
@@ -1088,9 +1108,9 @@ Not yet consuming `decision_made` (see Moderation Service below) — planned for
    - `JWT_SECRET`
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8080` (REST), `9090` (gRPC)
+**Ports:** gRPC on `9092` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/university-record-service:v0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/university-record-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Note:** `JWT_SECRET` must match whatever signing secret Player Service uses once real authentication is wired in (Lab 2+) — currently a local placeholder for testing the scope-filtering mechanism only.
 
@@ -1929,6 +1949,7 @@ Semantic versioning, tagged on `main` after each lab is presented:
 ```
 v0.1.0   Lab 0 — planning and contract
 v0.2.0   Lab 1 — first running services
+v0.3.0   Lab 2 — Gateway introduced
 ```
 
 Service repositories are tagged independently once they publish images; the CPR tag records
