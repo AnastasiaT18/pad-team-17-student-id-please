@@ -254,7 +254,6 @@ services:
       DB_USERNAME: ${SERVER_RULES_DB_USER}
       DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
     ports:
-      - "8083:8080"
       - "9091:9090"
     depends_on:
       server-rules-db:
