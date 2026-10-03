@@ -156,6 +156,13 @@ services:
       timeout: 5s
       retries: 10
 
+  # ---------------------------------------------------------------- gateway 
+  gateway-service:
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.2.0}
+    container_name: pad17-gateway-service
+    ports:
+      - "8090:8000"
+  
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
     image: janetag/player-service:${PLAYER_VERSION:-0.1.1}
