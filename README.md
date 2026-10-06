@@ -684,7 +684,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8081` (REST)
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
 
 **DockerHub:** `kutulin/pad-17-applicant-service:0.3.0` (public)
 
@@ -859,7 +859,7 @@ Idempotent on `applicant_id`.
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8082` (REST)
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
 
 **DockerHub:** `kutulin/pad-17-credential-service:0.3.0` (public)
 

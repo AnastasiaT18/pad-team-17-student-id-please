@@ -225,8 +225,6 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8081
-    ports:
-      - "8081:8081"
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -247,8 +245,6 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8082
-    ports:
-      - "8082:8082"
     depends_on:
       credential-db:
         condition: service_healthy
