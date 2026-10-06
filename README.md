@@ -583,6 +583,16 @@ blank, or if the body tries to change `student_id`, `applicant_id` or `session_i
 ```
 **Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
+The following two error responses apply to every REST endpoint above:
+
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+
 **Incoming gRPC**
 
 `ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
@@ -675,18 +685,19 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.3.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.0.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+   - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8081` (REST)
 
-**DockerHub:** `kutulin/pad-17-applicant-service:0.3.0` (public)
+**DockerHub:** `kutulin/pad-17-applicant-service:2.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -770,6 +781,16 @@ address, if `course_registration` is empty, or if the body tries to set `student
 ```
 **Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
+The following two error responses apply to every REST endpoint above:
+
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+
 **Incoming gRPC**
 
 `CredentialService.GetCredentials` - returns the applicant's documents and their validity so
@@ -850,18 +871,19 @@ Idempotent on `applicant_id`.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.3.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.0.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+   - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8082` (REST)
 
-**DockerHub:** `kutulin/pad-17-credential-service:0.3.0` (public)
+**DockerHub:** `kutulin/pad-17-credential-service:2.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
