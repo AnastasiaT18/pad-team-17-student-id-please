@@ -15,7 +15,6 @@
 name: pad-team-17
 
 services:
-
   # ---------------------------------------------------------------- infrastructure
 
   rabbitmq:
@@ -25,8 +24,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
-      - "5672:5672"     # AMQP
-      - "15672:15672"   # management UI
+      - "5672:5672" # AMQP
+      - "15672:15672" # management UI
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -49,7 +48,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   server-moderation-session-db:
     image: postgres:17-alpine
     container_name: pad17-server-moderation-session-db
@@ -60,7 +59,11 @@ services:
     volumes:
       - server-moderation-session-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${SERVER_MODERATION_SESSION_DB_USER} -d server_moderation_session"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${SERVER_MODERATION_SESSION_DB_USER} -d server_moderation_session",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -121,7 +124,8 @@ services:
     volumes:
       - university-record-db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d record_db"]
+      test:
+        ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d record_db"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -156,13 +160,13 @@ services:
       timeout: 5s
       retries: 10
 
-  # ---------------------------------------------------------------- gateway 
+  # ---------------------------------------------------------------- gateway
   gateway-service:
     image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.2.0}
     container_name: pad17-gateway-service
     ports:
       - "8090:8000"
-  
+
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
     image: janetag/player-service:${PLAYER_VERSION:-0.1.1}
@@ -181,7 +185,7 @@ services:
     depends_on:
       player-db:
         condition: service_healthy
- 
+
   server-moderation-session-service:
     image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.1.1}
     container_name: pad17-server-moderation-session-service
@@ -191,12 +195,18 @@ services:
       DB_NAME: server_moderation_session
       DB_USER: ${SERVER_MODERATION_SESSION_DB_USER}
       DB_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       PORT: 3001
     ports:
       - "8088:3001"
     depends_on:
       server-moderation-session-db:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 2 (Catalin)
@@ -247,7 +257,7 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0} 
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0}
     container_name: pad17-server-rules-service
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
