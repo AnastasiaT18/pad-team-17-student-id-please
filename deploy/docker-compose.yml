@@ -164,12 +164,14 @@ services:
   gateway-service:
     image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.2.0}
     container_name: pad17-gateway-service
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
     ports:
       - "8090:8000"
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.1.1}
+    image: janetag/player-service:${PLAYER_VERSION:-0.2.0}
     container_name: pad17-player-service
     environment:
       DB_HOST: player-db
@@ -179,15 +181,19 @@ services:
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: 1h
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT: 3000
-    ports:
-      - "8087:3000"
     depends_on:
       player-db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.1.1}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.2.0}
     container_name: pad17-server-moderation-session-service
     environment:
       DB_HOST: server-moderation-session-db
@@ -199,10 +205,10 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
+      APPLICANT_GRPC_URL: applicant-service:9090
+      UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
+      DISCORD_DMS_GRPC_URL: discord-dms-service:<grpc-port>
       PORT: 3001
-    ports:
-      - "8088:3001"
     depends_on:
       server-moderation-session-db:
         condition: service_healthy
