@@ -595,8 +595,14 @@ The following two error responses apply to every REST endpoint above:
 
 **Incoming gRPC**
 
+Served on port `9090` inside the Compose network (`applicant-service:9090`), not published on the host. The
+contract is `services/applicant-service/src/main/proto/applicant.proto` — `package applicant`, service `ApplicantService`;
+callers generate their stubs from it (NestJS: `package: 'applicant'`). Failures come back as gRPC status codes:
+`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant, `FAILED_PRECONDITION` for `GetNextApplicant` on a shift that is no longer running.
+
 `ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
-shift to its next applicant. Generates the applicant if the session has none pending.
+shift to its next applicant. Every call mints a new applicant for the shift (same as `POST /applicants`),
+so Session Service calls it only when the Moderator is ready for the next one.
 
 ```proto
 rpc GetNextApplicant (NextApplicantRequest) returns (NextApplicantResponse);
@@ -685,7 +691,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.0.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -693,11 +699,12 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
+   - `GRPC_PORT` (default `9090`) — optional; the gRPC port
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8081` (REST)
 
-**DockerHub:** `kutulin/pad-17-applicant-service:2.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:2.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -793,6 +800,11 @@ The following two error responses apply to every REST endpoint above:
 
 **Incoming gRPC**
 
+Served on port `9090` inside the Compose network (`credential-service:9090`), not published on the host. The
+contract is `services/credential-service/src/main/proto/credential.proto` — `package credential`, service `CredentialService`;
+callers generate their stubs from it (NestJS: `package: 'credential'`). Failures come back as gRPC status codes:
+`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant.
+
 `CredentialService.GetCredentials` - returns the applicant's documents and their validity so
 Moderation can check a decision against the rules. Server-to-server, so it does not pass through
 the API Gateway. It returns the same verdict the players see; this service still never compares a
@@ -871,7 +883,7 @@ Idempotent on `applicant_id`.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.0.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -879,11 +891,12 @@ Idempotent on `applicant_id`.
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
+   - `GRPC_PORT` (default `9090`) — optional; the gRPC port
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** `8082` (REST)
 
-**DockerHub:** `kutulin/pad-17-credential-service:2.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:2.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
