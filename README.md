@@ -942,6 +942,12 @@ The following two error responses apply to both `GET /rules` and `PUT /rules`:
 { "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
 ```
  
+ ### Timeout and concurrency limit
+
+- **Task timeout: 5 seconds.** Both REST handlers return a `Callable`, so a slower request is answered with `504 REQUEST_TIMEOUT` (`spring.mvc.async.request-timeout=5000`).
+- **Concurrent task limit: 20 requests in flight.** The 21st gets `429 TOO_MANY_REQUESTS` immediately. `ConcurrencyLimitFilter` holds a slot until the async request completes.
+
+These limits cover the REST API only, not the gRPC `EvaluateApplicant` endpoint.
 
 ### Rule condition format
 
@@ -992,6 +998,9 @@ No events published or consumed — Server Rules Service doesn't participate in 
 
 **Client-facing REST (via API Gateway)**
 
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never sees a token; its REST port is not published in the shared stack.
+
+
 `POST /records` - generate ground-truth records for a new applicant, when University Record Service is the first of the three applicant-side services to be contacted. It mints the applicant_id and the deception, then propagates both through record_initialized.
 ```json
 // Request
@@ -1012,13 +1021,14 @@ No events published or consumed — Server Rules Service doesn't participate in 
 // Response 422 — session_id is missing or blank
 { "error": { "code": "VALIDATION_FAILED", "message": "human text" } }
 ```
-Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` (Not yet enforced — see the service's own README.)
+The session is not verified yet (`404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` are planned for a future lab).
+
 
 
 `GET /sessions/{session_id}/records/{applicant_id}` - fetch the records the calling player is assigned to see, for this applicant, in this session
 ```json
 // Request
-// header: Authorization: Bearer <JWT>   (identifies the calling player)
+// header: X-Player-Id: <player id>   (set by the Gateway after validating the token)
 
 // Response 200
 {
@@ -1026,7 +1036,7 @@ Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_
   "data": { "enrollment": { "enrollment_status": "string" } }
 }
 
-// Response 401 — missing or malformed Authorization header / token
+// Response 401 — X-Player-Id header is missing (the request did not come through the Gateway)
 { "error": { "code": "UNAUTHORIZED", "message": "human text" } }
 
 // Response 403 — player has no scope assignment for this session
@@ -1035,14 +1045,10 @@ Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_
 // Response 404 — no record exists for this applicant
 { "error": { "code": "VALIDATION_FAILED", "message": "applicant not found" } }
 ```
-The service no longer trusts a client-supplied `scope` value. Instead it looks up which scope(s)
-the calling player (from the JWT) was assigned via `AssignScopes` — a gRPC call made by Server
-Moderation Session Service when the shift starts — and returns only that data. A player who
-wasn't in the session, or has no assignment, gets `403`. This is the actual enforcement point
-for the partitioning promised in Service Boundaries.
+The service looks up which scope(s) the calling player was assigned via `AssignScopes` and returns only that data. This is the enforcement point for the partitioning promised in Service Boundaries.
 
-The following two error responses apply to both `POST /records` and `GET /sessions/{session_id}/records/{applicant_id}`:
- 
+Both endpoints share a **5 second task timeout** and a **limit of 20 concurrent requests**:
+
 ```json
 // Response 429 — too many concurrent requests in flight
 { "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
@@ -1050,10 +1056,12 @@ The following two error responses apply to both `POST /records` and `GET /sessio
 // Response 504 — request exceeded the timeout
 { "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
 ```
+These apply to REST only, not to the gRPC methods.
 
-**Incoming gRPC (called by Server Moderation Session Service at shift start)**
 
-`AssignScopes`
+**Incoming gRPC**
+
+`AssignScopes` — called by Server Moderation Session Service at shift start. Idempotent per `(session_id, player_id)`: a repeated call replaces the stored scopes.
 ```proto
 rpc AssignScopes (AssignScopesRequest) returns (AssignScopesResponse);
 message AssignScopesRequest {
@@ -1066,9 +1074,15 @@ message PlayerScopeAssignment {
 }
 message AssignScopesResponse { bool success = 1; }
 ```
+
 Idempotent per `(session_id, player_id)` — a repeated call for the same pair replaces the stored scopes rather than duplicating the row.
 
-**Events published (RabbitMQ)**
+`GetRecordSnapshot` — called by Moderation Service. Returns the full, unfiltered record regardless of player scopes; `NOT_FOUND` if the applicant has no record. See Moderation Service below for the message shapes.
+
+
+**Events (RabbitMQ)**
+
+All Team 17 services use one shared topic exchange, `pad17.events`; routing keys are the event names.
 
 `record_initialized` - published when University Record Service is the first to be contacted for a new applicant.
 ```json
@@ -1083,41 +1097,12 @@ Idempotent per `(session_id, player_id)` — a repeated call for the same pair r
   "previously_banned": false
 }
 ```
-Consumed by Applicant Service and Credential Service to build their own data for this applicant.
+Consumed by Applicant Service and Credential Service.
 
-**Events consumed (RabbitMQ)**
+`applicant_initialized` and `credential_initialized` (consumed) - published by Applicant Service / Credential Service when they are contacted first instead; payloads as in those services' sections above. University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant. Idempotent on `applicant_id`.
 
-`applicant_initialized` - published by Applicant Service when it's contacted first instead.
-```json
-{
-  "applicant_id": "uuid",
-  "deception": "none | false_major | false_year | impersonation | expired_status",
-  "name": "string",
-  "student_id": "string",
-  "major": "string",
-  "year": 0,
-  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
-  "courses": ["string"],
-  "role": "string"
-}
-```
+Not yet consuming `decision_made`, so `previously_banned` isn't updated when a Moderator bans an applicant. Planned for a future lab.
 
-`credential_initialized` - published by Credential Service when it's contacted first instead.
-```json
-{
-  "applicant_id": "uuid",
-  "deception": "none | false_major | false_year | impersonation | expired_status",
-  "name": "string",
-  "student_id": "string",
-  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
-  "university_email": "string",
-  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
-  "course_registration": ["string"]
-}
-```
-University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant itself. Idempotent on `applicant_id`.
-
-Not yet consuming `decision_made` (see Moderation Service below) — planned for a future lab, so previously_banned isn't updated when a Moderator bans an applicant
 
 ### Running this service
 
@@ -1127,14 +1112,11 @@ Not yet consuming `decision_made` (see Moderation Service below) — planned for
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
-   - `JWT_SECRET`
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** gRPC on `9092` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
 **DockerHub:** `anastasiatiganescu/university-record-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
-
-**Note:** `JWT_SECRET` must match whatever signing secret Player Service uses once real authentication is wired in (Lab 2+) — currently a local placeholder for testing the scope-filtering mechanism only.
 
 **Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
