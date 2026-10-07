@@ -1936,7 +1936,7 @@ Lowercase, hyphen-separated, `<service>` matches the directory under `services/`
 
 - feature branch → `dev`: **squash merge**, so `dev` keeps one commit per task
 - `dev` → `main`: **merge commit**, so the integration history is preserved
-- **1 approval required** — a team of four stalls on two
+- **1 approval required** — a team of four stalls on two (!only applied to the CPR and Gateway repositories)
 - The branch is deleted after merge
 
 Rebase on `dev` before opening a PR; do not merge `dev` into your feature branch.
