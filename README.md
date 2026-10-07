@@ -304,21 +304,20 @@ No other microservice directly accesses the Player Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.1.1`
+1. Pull the public image — `docker pull janetag/player-service:0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `JWT_SECRET`, `JWT_EXPIRES_IN` — the same `JWT_SECRET` must be used by Server Moderation Session Service and University Record Service, since they only verify tokens this service signs
+   - `JWT_SECRET`, `JWT_EXPIRES_IN` — used only to sign tokens at login; the Gateway verifies them with the same `JWT_SECRET`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` — `RABBITMQ_EXCHANGE` is optional (default `pad17.events`)
    - `PORT` — `3000` inside the container
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8087` on the host (`3000` inside the container)
+**Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `janetag/player-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
-
-**Mocked until the other services exist:** the `shift_ended` consumer is not connected to a real broker yet (see above).
 
 **Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
 
@@ -497,6 +496,8 @@ No other microservice directly accesses the Session Service database.
 ### Applicant Service
 
 **Client-facing REST (via API Gateway)**
+
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. Only `POST /players` and `POST /players/login` are public; every other endpoint returns `401 UNAUTHORIZED` without a valid token.
 
 `POST /applicants` - generate a new applicant profile for a moderation session
 ```json
@@ -1143,7 +1144,7 @@ For each submitted verdict, it gathers applicant information, credentials, and u
 
 The Moderation Service does not define the rules that determine whether an applicant should be accepted, rejected, flagged, or banned. That responsibility belongs to the Server Rules Service.
 
-For Lab 1, dependencies on other microservices and RabbitMQ are implemented using mocks. The interfaces are kept separate so they can later be replaced by gRPC clients and a RabbitMQ publisher.
+The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange `pad17.events` with routing key `shift_ended`. A message that fails validation or processing is rejected without requeue. The handling logic (`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
 
 #### Requirements
 
