@@ -1,13 +1,49 @@
 {
   "info": {
-    "_postman_id": "8a29138b-ef5c-498e-b463-13ef5d60c5ac",
+    "_postman_id": "bb1133bb-8031-470c-8ae2-23210cc72f95",
     "name": "University Record Service",
-    "description": "Before running: this service's GET endpoint needs a player to have an assigned scope in the session. AssignScopes is gRPC only, so run this once via grpcurl before using this collection:\n\ngrpcurl -plaintext -proto services/university-record-service/src/main/proto/university_record.proto -d '{\"session_id\":\"test-session\",\"assignments\":\\[{\"player_id\":\"player-1\",\"scopes\":\\[\"enrollment\",\"courses\"\\]}\\]}' localhost:9092 UniversityRecordService/AssignScopes\n\nThe collection variable `token_player1` is a hand-built, unsigned JWT with sub=player-1 (signature verification isn't implemented yet, see README). `token_stranger` has sub=someone-never-assigned, used for the 403 case.",
+    "description": "Self-contained: a collection pre-request script registers/logs in two test players through the Gateway and fills token_player1 / token_stranger (no token copying from the Player collection).\n\nONE-TIME SETUP: AssignScopes is gRPC-only. Send any request once, open Postman Console (View > Show Postman Console), copy the printed grpcurl command and run it in a terminal. The assignment lives in the DB, so it survives re-runs until you `docker compose down -v`.\n\nThen run the collection in order.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "50442487",
-    "_collection_link": "https://go.postman.co/collection/50442487-8a29138b-ef5c-498e-b463-13ef5d60c5ac?source=collection_link"
+    "_collection_link": "https://go.postman.co/collection/50442487-bb1133bb-8031-470c-8ae2-23210cc72f95?source=collection_link"
   },
   "item": [
+    {
+      "name": "Get Record - invalid token (401 from Gateway)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{bearer_token_18wu}}"
+          }
+        ],
+        "url": {
+          "raw": "{{university_record_url}}/sessions/test-session/records/x",
+          "host": [
+            "{{university_record_url}}"
+          ],
+          "path": [
+            "sessions",
+            "test-session",
+            "records",
+            "x"
+          ]
+        }
+      },
+      "response": []
+    },
     {
       "name": "Create Record - Missing session_id (422)",
       "event": [
@@ -28,6 +64,10 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token_player1}}"
           }
         ],
         "body": {
@@ -106,6 +146,10 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token_player1}}"
           }
         ],
         "body": {
@@ -150,6 +194,10 @@
           {
             "key": "Content-Type",
             "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token_player1}}"
           }
         ],
         "body": {
@@ -279,6 +327,59 @@
       "response": []
     }
   ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Self-login: registers (or re-uses) test players through the Gateway and stores fresh JWTs.",
+          "// Nothing needs to be copied from the Player collection. Re-runs are safe: 409 = already registered.",
+          "const base = pm.collectionVariables.get('university_record_url');",
+          "const PASSWORD = 'secret123';",
+          "const USERS = [{\"tokenVar\": \"token_player1\", \"idVar\": \"player1_id\", \"email\": \"uni-record-player1@example.com\", \"username\": \"unirecordplayer1\"}, {\"tokenVar\": \"token_stranger\", \"idVar\": \"stranger_id\", \"email\": \"uni-record-stranger@example.com\", \"username\": \"unirecordstranger\"}];",
+          "",
+          "function decode(token) {",
+          "  try {",
+          "    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+          "  } catch (e) { return null; }",
+          "}",
+          "function stillValid(token) {",
+          "  const c = token && decode(token);",
+          "  return !!(c && c.exp * 1000 > Date.now() + 60000);",
+          "}",
+          "function post(path, body, cb) {",
+          "  pm.sendRequest({",
+          "    url: base + path, method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify(body) }",
+          "  }, cb);",
+          "}",
+          "USERS.forEach(u => {",
+          "  if (stillValid(pm.collectionVariables.get(u.tokenVar))) return;",
+          "  post('/players', { username: u.username, email: u.email, password: PASSWORD }, () => {",
+          "    post('/players/login', { email: u.email, password: PASSWORD }, (err, res) => {",
+          "      if (err || res.code !== 200) {",
+          "        console.error('Login failed for ' + u.email + ' - is the stack up and Player Service healthy?', err || res.code);",
+          "        return;",
+          "      }",
+          "      const token = res.json().token;",
+          "      pm.collectionVariables.set(u.tokenVar, token);",
+          "      pm.collectionVariables.set(u.idVar, decode(token).sub);",
+          "      console.log(u.tokenVar + ' ready, player id = ' + decode(token).sub);",
+          "      if (u.tokenVar === 'token_player1') {",
+          "        console.log('ONE-TIME: give this player a scope assignment (needs the DB volume to persist):\\n' +",
+          "          \"grpcurl -plaintext -proto services/university-record-service/src/main/proto/university_record.proto \" +",
+          "          \"-d '{\\\"session_id\\\":\\\"test-session\\\",\\\"assignments\\\":[{\\\"player_id\\\":\\\"\" + decode(token).sub +",
+          "          \"\\\",\\\"scopes\\\":[\\\"enrollment\\\",\\\"courses\\\"]}]}' localhost:9092 UniversityRecordService/AssignScopes\");",
+          "      }",
+          "    });",
+          "  });",
+          "});"
+        ]
+      }
+    }
+  ],
   "variable": [
     {
       "key": "university_record_url",
@@ -290,11 +391,23 @@
     },
     {
       "key": "token_player1",
-      "value": "eyJhbGciOiAibm9uZSJ9.eyJzdWIiOiAicGxheWVyLTEifQ.fake"
+      "value": ""
     },
     {
       "key": "token_stranger",
-      "value": "eyJhbGciOiAibm9uZSJ9.eyJzdWIiOiAic3RyYW5nZXIifQ.fake"
+      "value": ""
+    },
+    {
+      "key": "player1_id",
+      "value": ""
+    },
+    {
+      "key": "stranger_id",
+      "value": ""
+    },
+    {
+      "key": "bearer_token_18wu",
+      "secret": true
     }
   ]
 }
