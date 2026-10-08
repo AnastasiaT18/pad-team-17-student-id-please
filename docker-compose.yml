@@ -166,6 +166,9 @@ services:
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
+      DISCORD_DMS_PUBLIC_URL: http://localhost:8086
+      TASK_TIMEOUT_SECONDS: 5
+      CONCURRENT_TASK_LIMIT: 20
     ports:
       - "8090:8000"
 

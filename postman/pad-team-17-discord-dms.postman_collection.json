@@ -1,14 +1,14 @@
 {
   "info": {
     "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
-    "name": "Discord DMs Service",
-    "description": "Postman collection for the Discord DMs Service API, including mocked Session Service channel provisioning.",
+    "name": "Discord DMs Service - Gateway + Socket.IO",
+    "description": "Postman collection for Team 17 Discord DMs Service, updated for Lab 2.\n\nREST:\n- Every client REST request goes through the API Gateway at http://localhost:8090.\n- Bearer JWTs are obtained through Player Service via the Gateway.\n- Existing intentional error tests are preserved.\n\nWebSocket / Socket.IO:\n- The client first negotiates through GET /ws/discord-dms on the Gateway.\n- The Gateway validates the JWT and returns the public Discord DMs URL.\n- The client then connects directly to Discord DMs, so the Gateway is not in the persistent socket path.\n\nIMPORTANT:\nThis file uses the legacy Postman Collection v2.1 JSON format, which represents HTTP requests. Postman's Socket.IO request type is stored separately from normal HTTP v2.1 collection requests. The collection therefore contains the complete HTTP setup/negotiation flow plus a self-contained channel preparation step. After running the Socket.IO Preparation folder, create two Socket.IO requests in Postman using the saved socketio_url and the event payloads documented in that folder.\n\nRun order:\n0. Setup - creates/logs in moderator and junior through Gateway.\n1. Gateway WebSocket Negotiation - tests 401 errors and successful negotiation.\n2. Channels / 3. Messages - existing REST tests.\n4. Socket.IO Preparation - creates a channel containing both test players.\n5. Gateway authorization checks - intentional 401 errors.\n\nSocket.IO events:\nModerator join_channel:\n{ \"channel_id\": \"{{socket_channel_id}}\", \"player_id\": \"{{player_id}}\" }\n\nJunior join_channel:\n{ \"channel_id\": \"{{socket_channel_id}}\", \"player_id\": \"{{junior_player_id}}\" }\n\nModerator send_message:\n{ \"channel_id\": \"{{socket_channel_id}}\", \"sender_id\": \"{{player_id}}\", \"content\": \"Hello from moderator through Socket.IO\" }\n\nListen for server event: message\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8086"
+      "value": "http://localhost:8090"
     },
     {
       "key": "session_id",
@@ -25,11 +25,393 @@
     {
       "key": "message_id",
       "value": ""
+    },
+    {
+      "key": "run_id",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": "secret123"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "junior_player_id",
+      "value": ""
+    },
+    {
+      "key": "junior_token",
+      "value": ""
+    },
+    {
+      "key": "junior_email",
+      "value": ""
+    },
+    {
+      "key": "junior_username",
+      "value": ""
+    },
+    {
+      "key": "socket_url",
+      "value": ""
+    },
+    {
+      "key": "socketio_url",
+      "value": ""
+    },
+    {
+      "key": "socket_session_id",
+      "value": ""
+    },
+    {
+      "key": "socket_channel_id",
+      "value": ""
     }
   ],
   "item": [
     {
-      "name": "Channels",
+      "name": "0. Setup - Player authentication through Gateway",
+      "description": "Creates two temporary players through the Gateway: one moderator client and one junior client. Stores both IDs and JWTs.",
+      "item": [
+        {
+          "name": "Register moderator through Gateway",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const run = Date.now();",
+                  "pm.collectionVariables.set('run_id', String(run));",
+                  "pm.collectionVariables.set('username', `dmmoderator${run}`);",
+                  "pm.collectionVariables.set('email', `dmmoderator${run}@example.com`);",
+                  "pm.collectionVariables.set('junior_username', `dmjunior${run}`);",
+                  "pm.collectionVariables.set('junior_email', `dmjunior${run}@example.com`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Response has player_id', () => pm.expect(body).to.have.property('player_id'));",
+                  "pm.collectionVariables.set('player_id', body.player_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login moderator through Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Response has token', () => pm.expect(body).to.have.property('token'));",
+                  "pm.collectionVariables.set('token', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register junior through Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Response has player_id', () => pm.expect(body).to.have.property('player_id'));",
+                  "pm.collectionVariables.set('junior_player_id', body.player_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{junior_username}}\",\n  \"email\": \"{{junior_email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login junior through Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Response has token', () => pm.expect(body).to.have.property('token'));",
+                  "pm.collectionVariables.set('junior_token', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{junior_email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Gateway WebSocket Negotiation",
+      "description": "Tests the Lab 2 negotiation flow. The authenticated request saves both the Gateway-returned URL and a ws:// URL suitable for Postman's Socket.IO request UI.",
+      "item": [
+        {
+          "name": "Negotiate - no token (intentional 401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Gateway returns UNAUTHORIZED', () => pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/ws/discord-dms",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ws",
+                "discord-dms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Negotiate - invalid token (intentional 401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not.a.valid.jwt",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/ws/discord-dms",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ws",
+                "discord-dms"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Negotiate Discord DMs Socket.IO URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Response has url', () => pm.expect(body).to.have.property('url'));",
+                  "pm.collectionVariables.set('socket_url', body.url);",
+                  "const socketioUrl = body.url.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');",
+                  "pm.collectionVariables.set('socketio_url', socketioUrl);",
+                  "pm.test('Negotiation points to Discord DMs, not Gateway', () => {",
+                  "  pm.expect(body.url).to.not.include(':8090');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/ws/discord-dms",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ws",
+                "discord-dms"
+              ]
+            },
+            "description": "Authenticated negotiation through Gateway. Saves socket_url and socketio_url."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Channels",
       "item": [
         {
           "name": "Create Channel",
@@ -222,7 +604,7 @@
       ]
     },
     {
-      "name": "Messages",
+      "name": "3. Messages",
       "item": [
         {
           "name": "Create Message",
@@ -346,6 +728,187 @@
           }
         }
       ]
+    },
+    {
+      "name": "4. Socket.IO Preparation",
+      "description": "Run these requests after Setup and Negotiation.\n\nThe first request creates a dedicated channel containing BOTH generated test players and saves socket_channel_id.\n\nThen in Postman create TWO Socket.IO requests:\n\nModerator Socket\nURL: {{socketio_url}}\nEmit join_channel:\n{\n  \"channel_id\": \"{{socket_channel_id}}\",\n  \"player_id\": \"{{player_id}}\"\n}\n\nJunior Socket\nURL: {{socketio_url}}\nEmit join_channel:\n{\n  \"channel_id\": \"{{socket_channel_id}}\",\n  \"player_id\": \"{{junior_player_id}}\"\n}\n\nOn Junior Socket, listen for event: message\n\nThen on Moderator Socket emit send_message:\n{\n  \"channel_id\": \"{{socket_channel_id}}\",\n  \"sender_id\": \"{{player_id}}\",\n  \"content\": \"Hello from moderator through Socket.IO\"\n}\n\nExpected: Junior receives the server event 'message' with the persisted message object.\n",
+      "item": [
+        {
+          "name": "Create two-player Socket.IO test channel through Gateway",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('socket_session_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('socket_channel_id', body.id);",
+                  "pm.test('Both players belong to channel', () => {",
+                  "  pm.expect(body.player_ids).to.include(pm.collectionVariables.get('player_id'));",
+                  "  pm.expect(body.player_ids).to.include(pm.collectionVariables.get('junior_player_id'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{socket_session_id}}\",\n  \"name\": \"socketio-test\",\n  \"player_ids\": [\n    \"{{player_id}}\",\n    \"{{junior_player_id}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Socket.IO test channel through Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Correct socket channel returned', () => pm.expect(body.id).to.eql(pm.collectionVariables.get('socket_channel_id')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/channels/{{socket_channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{socket_channel_id}}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Gateway authorization checks",
+      "item": [
+        {
+          "name": "No token - 401 from Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Gateway returns UNAUTHORIZED\", () => pm.expect(pm.response.json().error.code).to.eql(\"UNAUTHORIZED\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels"
+              ]
+            },
+            "description": "Intentional error: proves the Gateway rejects a protected REST request with no JWT."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid token - 401 from Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not.a.valid.jwt",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels"
+              ]
+            },
+            "description": "Intentional error: proves the Gateway validates bearer tokens."
+          },
+          "response": []
+        }
+      ]
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
 }

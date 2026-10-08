@@ -1954,7 +1954,7 @@ Link Applicant and Credential services as submodules
 
 Every PR states:
 
-1. **What** changed
+1. **What changed**
 2. **Why** — the task or decision behind it
 3. **How it was tested** — commands run, or "docs only"
 4. **Linked task** from the project board
