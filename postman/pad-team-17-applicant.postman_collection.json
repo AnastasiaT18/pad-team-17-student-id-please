@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Applicant Service",
-    "description": "Applicant Service - Team 17 \"Student ID, please\".\n\nOwns an applicant's claimed identity. Covers the full CRUD, every error path, and the mocked Session Service lookup (two fixed session ids return 404 and 409).\n\nEvery response is checked for the absence of `deception`: it is the answer to the puzzle the players solve, so leaking it would end the game.\n\nRun the service first - see deploy/docker-compose.yml. Requests are ordered to run start to finish: creating an applicant stores its id for the requests that follow.",
+    "description": "Applicant Service - Team 17 \"Student ID, please\".\n\nOwns an applicant's claimed identity. Covers the full CRUD, every error path, and the mocked Session Service lookup (two fixed session ids return 404 and 409).\n\nEvery response is checked for the absence of `deception`: it is the answer to the puzzle the players solve, so leaking it would end the game.\n\nRun the service first - see docker-compose.yml. Requests are ordered to run start to finish: creating an applicant stores its id for the requests that follow.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
