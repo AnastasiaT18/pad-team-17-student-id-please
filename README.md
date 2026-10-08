@@ -704,7 +704,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8081` (REST)
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
 
 **DockerHub:** `kutulin/pad-17-applicant-service:2.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
@@ -896,7 +896,7 @@ Idempotent on `applicant_id`.
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8082` (REST)
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
 
 **DockerHub:** `kutulin/pad-17-credential-service:2.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
