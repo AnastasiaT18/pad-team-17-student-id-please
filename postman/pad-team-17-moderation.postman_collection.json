@@ -2,13 +2,13 @@
   "info": {
     "_postman_id": "d9e58e16-41e1-4f9c-8ec7-moderation-service",
     "name": "Moderation Service",
-    "description": "Postman collection for the Student ID, please Moderation Service.",
+    "description": "Postman collection for the Student ID, please Moderation Service, tested through the API Gateway (http://localhost:8090).\n\nRun the collection from top to bottom. The Setup folder registers and logs in a temporary player through the Gateway and stores the JWT. All Moderation REST requests then use the Gateway.\n\nExisting validation, duplicate, nonexistent-resource, and deletion error tests are intentionally preserved. The final Gateway authorization checks intentionally expect 401 responses.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8085"
+      "value": "http://localhost:8090"
     },
     {
       "key": "session_id",
@@ -21,9 +21,144 @@
     {
       "key": "decision_id",
       "value": ""
+    },
+    {
+      "key": "run_id",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": "secret123"
+    },
+    {
+      "key": "token",
+      "value": ""
     }
   ],
   "item": [
+    {
+      "name": "0. Setup - Player authentication through Gateway",
+      "item": [
+        {
+          "name": "Register test player through Gateway",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const run = Date.now();",
+                  "pm.collectionVariables.set(\"run_id\", String(run));",
+                  "pm.collectionVariables.set(\"email\", `moderationtester${run}@example.com`);",
+                  "pm.collectionVariables.set(\"username\", `moderationtester${run}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Response has player_id\", () => pm.expect(body).to.have.property(\"player_id\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
+            },
+            "description": "Creates a temporary player through the API Gateway so the collection can obtain a valid JWT."
+          },
+          "response": []
+        },
+        {
+          "name": "Login test player through Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"Response has token\", () => pm.expect(body).to.have.property(\"token\"));",
+                  "pm.collectionVariables.set(\"token\", body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            },
+            "description": "Logs in through the API Gateway and stores the JWT in the collection variable token."
+          },
+          "response": []
+        }
+      ]
+    },
     {
       "name": "1. Create Decision",
       "request": {
@@ -439,6 +574,93 @@
           }
         }
       ]
+    },
+    {
+      "name": "Gateway authorization checks",
+      "item": [
+        {
+          "name": "No token - 401 from Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Gateway returns UNAUTHORIZED\", () => pm.expect(pm.response.json().error.code).to.eql(\"UNAUTHORIZED\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/decisions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "decisions"
+              ]
+            },
+            "description": "Intentional error: proves the Gateway rejects a protected REST request with no JWT."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid token - 401 from Gateway",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not.a.valid.jwt",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/decisions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "decisions"
+              ]
+            },
+            "description": "Intentional error: proves the Gateway validates bearer tokens."
+          },
+          "response": []
+        }
+      ]
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
 }
