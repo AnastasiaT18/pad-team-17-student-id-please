@@ -304,21 +304,20 @@ No other microservice directly accesses the Player Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.1.1`
+1. Pull the public image — `docker pull janetag/player-service:0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `JWT_SECRET`, `JWT_EXPIRES_IN` — the same `JWT_SECRET` must be used by Server Moderation Session Service and University Record Service, since they only verify tokens this service signs
+   - `JWT_SECRET`, `JWT_EXPIRES_IN` — used only to sign tokens at login; the Gateway verifies them with the same `JWT_SECRET`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` — `RABBITMQ_EXCHANGE` is optional (default `pad17.events`)
    - `PORT` — `3000` inside the container
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8087` on the host (`3000` inside the container)
+**Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `janetag/player-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
-
-**Mocked until the other services exist:** the `shift_ended` consumer is not connected to a real broker yet (see above).
 
 **Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
 
@@ -328,8 +327,7 @@ No other microservice directly accesses the Player Service database.
 
 **Client-facing REST (via API Gateway)**
 
-All endpoints require a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or
-invalid token returns `401 UNAUTHORIZED`.
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. A request without `X-Player-Id` (one that did not come through the Gateway) returns `401 UNAUTHORIZED`.
  
 `POST /sessions` - create a session
 ```json
@@ -338,7 +336,7 @@ invalid token returns `401 UNAUTHORIZED`.
 ```
 
 
-`POST /sessions/{session_id}/join` - the calling player (identified via JWT) joins an existing, not-yet-started session as Junior Moderator
+`POST /sessions/{session_id}/join` - the calling player (identified by X-Player-Id) joins an existing, not-yet-started session as Junior Moderator
 ```json
 // Response 200
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
@@ -354,7 +352,7 @@ invalid token returns `401 UNAUTHORIZED`.
 { "session_id": "uuid", "status": "active", "started_at": "RFC3339" }
 ```
 
-**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended.
+**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended. `503 UPSTREAM_UNAVAILABLE` if a downstream service is unreachable or too slow, `502 UPSTREAM_ERROR` if it rejects the call.
 
 
 `GET /sessions/{session_id}` - full state
@@ -413,11 +411,16 @@ message NextApplicantResponse { string applicant_id = 1; }
 rpc ProvisionChannels (ProvisionChannelsRequest) returns (ProvisionChannelsResponse);
 message ProvisionChannelsRequest {
   string session_id = 1;
-  repeated string participant_ids = 2;
+  repeated Participant participants = 2;
 }
-message ProvisionChannelsResponse { repeated Channel channels = 1; }
-message Channel { string channel_id = 1; string name = 2; }
+message Participant {
+  string player_id = 1;
+  string role = 2; // moderator | junior_moderator
+  repeated string scopes = 3; // enrollment | courses | schedule | messages
+}
+message ProvisionChannelsResponse { bool success = 1; }
 ```
+The Moderator receives all scopes; each Junior Moderator receives only their assigned scope(s).
 
 `UniversityRecordService.AssignScopes`
 ```proto
@@ -474,21 +477,18 @@ No other microservice directly accesses the Session Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.1.1`
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
-   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `JWT_SECRET` — must match the secret Player Service signs tokens with, since this service only verifies tokens and never issues them
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
    - `PORT` — `3001` inside the container
 3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8088` on the host (`3001` inside the container)
+**Ports:** not published on the host; reachable only through the Gateway (localhost:8090)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `janetag/server-moderation-session-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
-
-**Mocked until the other services exist:** the RabbitMQ publisher (`shift_ended`) and consumer (`decision_made`), and the outgoing gRPC calls to Applicant, Discord DMs and University Record Services.
 
 **Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
 
@@ -497,6 +497,8 @@ No other microservice directly accesses the Session Service database.
 ### Applicant Service
 
 **Client-facing REST (via API Gateway)**
+
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. Only `POST /players` and `POST /players/login` are public; every other endpoint returns `401 UNAUTHORIZED` without a valid token.
 
 `POST /applicants` - generate a new applicant profile for a moderation session
 ```json
@@ -1143,7 +1145,7 @@ For each submitted verdict, it gathers applicant information, credentials, and u
 
 The Moderation Service does not define the rules that determine whether an applicant should be accepted, rejected, flagged, or banned. That responsibility belongs to the Server Rules Service.
 
-For Lab 1, dependencies on other microservices and RabbitMQ are implemented using mocks. The interfaces are kept separate so they can later be replaced by gRPC clients and a RabbitMQ publisher.
+The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange `pad17.events` with routing key `shift_ended`. A message that fails validation or processing is rejected without requeue. The handling logic (`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
 
 #### Requirements
 
@@ -1934,7 +1936,7 @@ Lowercase, hyphen-separated, `<service>` matches the directory under `services/`
 
 - feature branch → `dev`: **squash merge**, so `dev` keeps one commit per task
 - `dev` → `main`: **merge commit**, so the integration history is preserved
-- **1 approval required** — a team of four stalls on two
+- **1 approval required** — a team of four stalls on two (!only applied to the CPR and Gateway repositories)
 - The branch is deleted after merge
 
 Rebase on `dev` before opening a PR; do not merge `dev` into your feature branch.
