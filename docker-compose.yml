@@ -207,7 +207,7 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       APPLICANT_GRPC_URL: applicant-service:9090
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
-      DISCORD_DMS_GRPC_URL: discord-dms-service:<grpc-port>
+      DISCORD_DMS_GRPC_URL: discord-dms-service:9090
       PORT: 3001
     depends_on:
       server-moderation-session-db:
@@ -292,26 +292,41 @@ services:
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-0.2.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.3.0}
     container_name: pad17-moderation-service
+
     environment:
       PORT: 3000
+
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USERNAME: ${MODERATION_DB_USER}
       DB_PASSWORD: ${MODERATION_DB_PASSWORD}
       DB_DATABASE: moderation
+
+      APPLICANT_GRPC_URL: applicant-service:9090
+      CREDENTIAL_GRPC_URL: credential-service:9090
+      UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
+      SERVER_RULES_GRPC_URL: server-rules-service:9090
+
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+
     ports:
       - "8085:3000"
+
     depends_on:
       moderation-db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-0.3.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
     container_name: pad17-discord-dms-service
     environment:
       PORT: 3000
+      GRPC_URL: 0.0.0.0:9090
       DB_HOST: discord-dms-db
       DB_PORT: 5432
       DB_USERNAME: ${DISCORD_DMS_DB_USER}

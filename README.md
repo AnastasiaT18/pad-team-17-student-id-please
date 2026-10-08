@@ -311,7 +311,7 @@ No other microservice directly accesses the Player Service database.
    - `JWT_SECRET`, `JWT_EXPIRES_IN` — used only to sign tokens at login; the Gateway verifies them with the same `JWT_SECRET`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` — `RABBITMQ_EXCHANGE` is optional (default `pad17.events`)
    - `PORT` — `3000` inside the container
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
 **Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
 
@@ -482,7 +482,7 @@ No other microservice directly accesses the Session Service database.
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
    - `PORT` — `3001` inside the container
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
 **Ports:** not published on the host; reachable only through the Gateway (localhost:8090)
 
@@ -702,7 +702,7 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
 
@@ -894,7 +894,7 @@ Idempotent on `applicant_id`.
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
 
@@ -999,7 +999,7 @@ No events published or consumed — Server Rules Service doesn't participate in 
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
 **Ports:** gRPC on `9091` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
@@ -1127,7 +1127,7 @@ Not yet consuming `decision_made`, so `previously_banned` isn't updated when a M
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
 **Ports:** gRPC on `9092` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
@@ -1202,7 +1202,7 @@ http://localhost:3000
 The service and its PostgreSQL database can be started using Docker Compose:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose up -d
 ```
 
 The Moderation Service runs on port `3000` inside its container and is exposed on the host at:
@@ -1231,13 +1231,13 @@ PostgreSQL data is stored in a persistent Docker volume.
 To check the containers:
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps
+docker compose ps
 ```
 
 To stop the service:
 
 ```bash
-docker compose -f deploy/docker-compose.yml down
+docker compose down
 ```
 
 #### Communication
@@ -1610,7 +1610,7 @@ http://localhost:3000
 The recommended way to run the complete service is with Docker Compose:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose up -d
 ```
 
 The Discord DMs Service runs on port `3000` inside its container and is exposed on the host at:
@@ -1639,13 +1639,13 @@ PostgreSQL data is stored in a persistent Docker volume.
 To check the containers:
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps
+docker compose ps
 ```
 
 To stop the service:
 
 ```bash
-docker compose -f deploy/docker-compose.yml down
+docker compose down
 ```
 
 #### Communication
