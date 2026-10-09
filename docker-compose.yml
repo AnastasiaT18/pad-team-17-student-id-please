@@ -15,7 +15,6 @@
 name: pad-team-17
 
 services:
-
   # ---------------------------------------------------------------- infrastructure
 
   rabbitmq:
@@ -25,8 +24,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
-      - "5672:5672"     # AMQP
-      - "15672:15672"   # management UI
+      - "5672:5672" # AMQP
+      - "15672:15672" # management UI
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -49,7 +48,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   server-moderation-session-db:
     image: postgres:17-alpine
     container_name: pad17-server-moderation-session-db
@@ -60,7 +59,11 @@ services:
     volumes:
       - server-moderation-session-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${SERVER_MODERATION_SESSION_DB_USER} -d server_moderation_session"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${SERVER_MODERATION_SESSION_DB_USER} -d server_moderation_session",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -121,7 +124,8 @@ services:
     volumes:
       - university-record-db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d record_db"]
+      test:
+        ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d record_db"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -156,9 +160,21 @@ services:
       timeout: 5s
       retries: 10
 
+  # ---------------------------------------------------------------- gateway
+  gateway-service:
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.2.0}
+    container_name: pad17-gateway-service
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      DISCORD_DMS_PUBLIC_URL: http://localhost:8086
+      TASK_TIMEOUT_SECONDS: 5
+      CONCURRENT_TASK_LIMIT: 20
+    ports:
+      - "8090:8000"
+
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.1.1}
+    image: janetag/player-service:${PLAYER_VERSION:-0.2.0}
     container_name: pad17-player-service
     environment:
       DB_HOST: player-db
@@ -168,15 +184,19 @@ services:
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: 1h
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT: 3000
-    ports:
-      - "8087:3000"
     depends_on:
       player-db:
         condition: service_healthy
- 
+      rabbitmq:
+        condition: service_healthy
+
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.1.1}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.2.0}
     container_name: pad17-server-moderation-session-service
     environment:
       DB_HOST: server-moderation-session-db
@@ -184,18 +204,24 @@ services:
       DB_NAME: server_moderation_session
       DB_USER: ${SERVER_MODERATION_SESSION_DB_USER}
       DB_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      APPLICANT_GRPC_URL: applicant-service:9090
+      UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
+      DISCORD_DMS_GRPC_URL: discord-dms-service:9090
       PORT: 3001
-    ports:
-      - "8088:3001"
     depends_on:
       server-moderation-session-db:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-0.3.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-2.1.0}
     container_name: pad17-applicant-service
     environment:
       DB_HOST: applicant-db
@@ -208,8 +234,6 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8081
-    ports:
-      - "8081:8081"
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -217,7 +241,7 @@ services:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-0.3.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-2.1.0}
     container_name: pad17-credential-service
     environment:
       DB_HOST: credential-db
@@ -230,8 +254,6 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8082
-    ports:
-      - "8082:8082"
     depends_on:
       credential-db:
         condition: service_healthy
@@ -240,21 +262,20 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.1.1}
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0}
     container_name: pad17-server-rules-service
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
       DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
     ports:
-      - "8083:8080"
       - "9091:9090"
     depends_on:
       server-rules-db:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.1.1}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.2.0}
     container_name: pad17-university-record-service
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
@@ -264,9 +285,7 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
     ports:
-      - "8084:8080"
       - "9092:9090"
     depends_on:
       university-record-db:
@@ -276,33 +295,55 @@ services:
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-0.2.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-3.0.0}
     container_name: pad17-moderation-service
+
     environment:
       PORT: 3000
+
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USERNAME: ${MODERATION_DB_USER}
       DB_PASSWORD: ${MODERATION_DB_PASSWORD}
-      DB_DATABASE: moderation
-    ports:
-      - "8085:3000"
+      DB_NAME: moderation
+
+      TASK_TIMEOUT_MS: 5000
+      MAX_CONCURRENT_TASKS: 20
+
+      APPLICANT_GRPC_URL: applicant-service:9090
+      CREDENTIAL_GRPC_URL: credential-service:9090
+      UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
+      SERVER_RULES_GRPC_URL: server-rules-service:9090
+
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+
     depends_on:
       moderation-db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-0.3.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-3.0.0}
     container_name: pad17-discord-dms-service
+
     environment:
       PORT: 3000
+      GRPC_URL: 0.0.0.0:9090
+
       DB_HOST: discord-dms-db
       DB_PORT: 5432
       DB_USERNAME: ${DISCORD_DMS_DB_USER}
       DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
-      DB_DATABASE: discord_dms
+      DB_NAME: discord_dms
+
+      TASK_TIMEOUT_MS: 5000
+      MAX_CONCURRENT_TASKS: 20
+
     ports:
       - "8086:3000"
+
     depends_on:
       discord-dms-db:
         condition: service_healthy

@@ -1,9 +1,52 @@
 {
   "info": {
     "name": "Applicant Service",
-    "description": "Applicant Service - Team 17 \"Student ID, please\".\n\nOwns an applicant's claimed identity. Covers the full CRUD, every error path, and the mocked Session Service lookup (two fixed session ids return 404 and 409).\n\nEvery response is checked for the absence of `deception`: it is the answer to the puzzle the players solve, so leaking it would end the game.\n\nRun the service first - see deploy/docker-compose.yml. Requests are ordered to run start to finish: creating an applicant stores its id for the requests that follow.",
+    "description": "Applicant Service - Team 17 \"Student ID, please\".\n\nOwns an applicant's claimed identity. Covers the full CRUD, every error path, and the mocked Session Service lookup (two fixed session ids return 404 and 409).\n\nEvery response is checked for the absence of `deception`: it is the answer to the puzzle the players solve, so leaking it would end the game.\n\nRun the service first - see docker-compose.yml. Requests are ordered to run start to finish: creating an applicant stores its id for the requests that follow.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Every request goes through the Gateway, which only lets a request in with a valid Bearer token.",
+          "// The first request of a run registers a throwaway player and logs in; the token is reused by the",
+          "// requests after it and renewed after 50 minutes, since Player Service issues it for one hour.",
+          "const obtainedAt = Number(pm.collectionVariables.get('token_obtained_at') || 0);",
+          "if (!pm.collectionVariables.get('token') || Date.now() - obtainedAt > 50 * 60 * 1000) {",
+          "  const baseUrl = pm.variables.get('base_url');",
+          "  const suffix = Date.now();",
+          "  const player = { username: `pairtwo${suffix}`, email: `pairtwo${suffix}@example.com`, password: 'secret123' };",
+          "  const post = (path, body) => ({",
+          "    url: baseUrl + path,",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify(body) },",
+          "  });",
+          "  pm.sendRequest(post('/players', player), (registerError) => {",
+          "    if (registerError) throw registerError;",
+          "    pm.sendRequest(post('/players/login', { email: player.email, password: player.password }), (loginError, response) => {",
+          "      if (loginError) throw loginError;",
+          "      pm.collectionVariables.set('token', response.json().token);",
+          "      pm.collectionVariables.set('token_obtained_at', String(Date.now()));",
+          "    });",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ],
   "item": [
     {
       "name": "Create applicant",
@@ -468,12 +511,47 @@
           }
         }
       ]
+    },
+    {
+      "name": "Get applicants - no token",
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/applicants",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "applicants"
+          ]
+        },
+        "description": "Without a Bearer token the Gateway answers 401 itself; the request never reaches the service."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+              "pm.test('uses the shared error envelope', () => {",
+              "  pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED');",
+              "});"
+            ]
+          }
+        }
+      ]
     }
   ],
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8081"
+      "value": "http://localhost:8090"
     },
     {
       "key": "session_id",
@@ -490,6 +568,14 @@
     {
       "key": "ended_session_id",
       "value": "00000000-0000-0000-0000-0000000e0d0d"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "token_obtained_at",
+      "value": ""
     }
   ]
 }

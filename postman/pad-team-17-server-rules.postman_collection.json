@@ -1,12 +1,83 @@
 {
   "info": {
-    "_postman_id": "5f3d8076-a6f3-4577-997d-387626e32620",
+    "_postman_id": "6129389f-9988-4e75-9c74-289ffa39f6e5",
     "name": "Server Rules Service",
+    "description": "Server Rules Service, tested through the Gateway (http://localhost:8090). The service's own REST port is not published, so the Gateway is the only way in.\n\nAUTH: nothing to set up. A collection pre-request script registers a test player (server-rules-tester@example.com) through the Gateway, logs in, and stores the JWT in the `token` variable. Every request inherits `Bearer {{token}}`. The token is refreshed automatically when it expires. If login fails, check Postman Console (View > Show Postman Console) and make sure Player Service and the Gateway are up (`docker compose ps`, `curl localhost:8090/health`).\n\nRUN ORDER: run the collection top to bottom.\n1-2. No token / invalid token -> 401 from the Gateway (proves auth is enforced at the Gateway).\n3. Get Rules -> 200.\n4. Replace Rules -> 200. NOTE: this wipes the previous rule set and replaces it with one rule.\n5-7. Validation errors: missing condition (422), missing rules field (422), malformed JSON (400).\n\nNOT COVERED HERE: the gRPC EvaluateApplicant method (host port 9091). Test it with grpcurl or a Postman gRPC request using services/server-rules-service/src/main/proto/server_rules.proto.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "50442487",
-    "_collection_link": "https://go.postman.co/collection/50442487-5f3d8076-a6f3-4577-997d-387626e32620?source=collection_link"
+    "_collection_link": "https://go.postman.co/collection/50442487-6129389f-9988-4e75-9c74-289ffa39f6e5?source=collection_link"
   },
   "item": [
+    {
+      "name": "Get Rules - no token (401 from Gateway)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+              "pm.test('code is UNAUTHORIZED', () => pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Get Rules - invalid token (401 from Gateway)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "not.a.jwt",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{server_rules_url}}/rules",
+          "host": [
+            "{{server_rules_url}}"
+          ],
+          "path": [
+            "rules"
+          ]
+        }
+      },
+      "response": []
+    },
     {
       "name": "Get Rules",
       "event": [
@@ -229,10 +300,76 @@
       "response": []
     }
   ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Self-login: registers (or re-uses) test players through the Gateway and stores fresh JWTs.",
+          "// Nothing needs to be copied from the Player collection. Re-runs are safe: 409 = already registered.",
+          "const base = pm.collectionVariables.get('server_rules_url');",
+          "const PASSWORD = 'secret123';",
+          "const USERS = [{\"tokenVar\": \"token\", \"idVar\": \"player_id\", \"email\": \"server-rules-tester@example.com\", \"username\": \"serverrulestester\"}];",
+          "",
+          "function decode(token) {",
+          "  try {",
+          "    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+          "  } catch (e) { return null; }",
+          "}",
+          "function stillValid(token) {",
+          "  const c = token && decode(token);",
+          "  return !!(c && c.exp * 1000 > Date.now() + 60000);",
+          "}",
+          "function post(path, body, cb) {",
+          "  pm.sendRequest({",
+          "    url: base + path, method: 'POST',",
+          "    header: { 'Content-Type': 'application/json' },",
+          "    body: { mode: 'raw', raw: JSON.stringify(body) }",
+          "  }, cb);",
+          "}",
+          "USERS.forEach(u => {",
+          "  if (stillValid(pm.collectionVariables.get(u.tokenVar))) return;",
+          "  post('/players', { username: u.username, email: u.email, password: PASSWORD }, () => {",
+          "    post('/players/login', { email: u.email, password: PASSWORD }, (err, res) => {",
+          "      if (err || res.code !== 200) {",
+          "        console.error('Login failed for ' + u.email + ' - is the stack up and Player Service healthy?', err || res.code);",
+          "        return;",
+          "      }",
+          "      const token = res.json().token;",
+          "      pm.collectionVariables.set(u.tokenVar, token);",
+          "      pm.collectionVariables.set(u.idVar, decode(token).sub);",
+          "      console.log(u.tokenVar + ' ready, player id = ' + decode(token).sub);",
+          "",
+          "    });",
+          "  });",
+          "});"
+        ]
+      }
+    }
+  ],
   "variable": [
     {
       "key": "server_rules_url",
-      "value": "http://localhost:8083"
+      "value": "http://localhost:8090"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "player_id",
+      "value": ""
     }
   ]
 }

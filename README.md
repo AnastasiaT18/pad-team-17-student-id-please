@@ -304,21 +304,20 @@ No other microservice directly accesses the Player Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.1.1`
+1. Pull the public image — `docker pull janetag/player-service:0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `JWT_SECRET`, `JWT_EXPIRES_IN` — the same `JWT_SECRET` must be used by Server Moderation Session Service and University Record Service, since they only verify tokens this service signs
+   - `JWT_SECRET`, `JWT_EXPIRES_IN` — used only to sign tokens at login; the Gateway verifies them with the same `JWT_SECRET`
+   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` — `RABBITMQ_EXCHANGE` is optional (default `pad17.events`)
    - `PORT` — `3000` inside the container
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8087` on the host (`3000` inside the container)
+**Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `janetag/player-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
-
-**Mocked until the other services exist:** the `shift_ended` consumer is not connected to a real broker yet (see above).
 
 **Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
 
@@ -328,8 +327,7 @@ No other microservice directly accesses the Player Service database.
 
 **Client-facing REST (via API Gateway)**
 
-All endpoints require a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or
-invalid token returns `401 UNAUTHORIZED`.
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. A request without `X-Player-Id` (one that did not come through the Gateway) returns `401 UNAUTHORIZED`.
  
 `POST /sessions` - create a session
 ```json
@@ -338,7 +336,7 @@ invalid token returns `401 UNAUTHORIZED`.
 ```
 
 
-`POST /sessions/{session_id}/join` - the calling player (identified via JWT) joins an existing, not-yet-started session as Junior Moderator
+`POST /sessions/{session_id}/join` - the calling player (identified by X-Player-Id) joins an existing, not-yet-started session as Junior Moderator
 ```json
 // Response 200
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
@@ -354,7 +352,7 @@ invalid token returns `401 UNAUTHORIZED`.
 { "session_id": "uuid", "status": "active", "started_at": "RFC3339" }
 ```
 
-**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended.
+**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended. `503 UPSTREAM_UNAVAILABLE` if a downstream service is unreachable or too slow, `502 UPSTREAM_ERROR` if it rejects the call.
 
 
 `GET /sessions/{session_id}` - full state
@@ -413,11 +411,16 @@ message NextApplicantResponse { string applicant_id = 1; }
 rpc ProvisionChannels (ProvisionChannelsRequest) returns (ProvisionChannelsResponse);
 message ProvisionChannelsRequest {
   string session_id = 1;
-  repeated string participant_ids = 2;
+  repeated Participant participants = 2;
 }
-message ProvisionChannelsResponse { repeated Channel channels = 1; }
-message Channel { string channel_id = 1; string name = 2; }
+message Participant {
+  string player_id = 1;
+  string role = 2; // moderator | junior_moderator
+  repeated string scopes = 3; // enrollment | courses | schedule | messages
+}
+message ProvisionChannelsResponse { bool success = 1; }
 ```
+The Moderator receives all scopes; each Junior Moderator receives only their assigned scope(s).
 
 `UniversityRecordService.AssignScopes`
 ```proto
@@ -474,21 +477,18 @@ No other microservice directly accesses the Session Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.1.1`
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
-   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `JWT_SECRET` — must match the secret Player Service signs tokens with, since this service only verifies tokens and never issues them
+   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
    - `PORT` — `3001` inside the container
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8088` on the host (`3001` inside the container)
+**Ports:** not published on the host; reachable only through the Gateway (localhost:8090)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `janetag/server-moderation-session-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
-
-**Mocked until the other services exist:** the RabbitMQ publisher (`shift_ended`) and consumer (`decision_made`), and the outgoing gRPC calls to Applicant, Discord DMs and University Record Services.
 
 **Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
 
@@ -497,6 +497,8 @@ No other microservice directly accesses the Session Service database.
 ### Applicant Service
 
 **Client-facing REST (via API Gateway)**
+
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. Only `POST /players` and `POST /players/login` are public; every other endpoint returns `401 UNAUTHORIZED` without a valid token.
 
 `POST /applicants` - generate a new applicant profile for a moderation session
 ```json
@@ -583,10 +585,26 @@ blank, or if the body tries to change `student_id`, `applicant_id` or `session_i
 ```
 **Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
+The following two error responses apply to every REST endpoint above:
+
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+
 **Incoming gRPC**
 
+Served on port `9090` inside the Compose network (`applicant-service:9090`), not published on the host. The
+contract is `services/applicant-service/src/main/proto/applicant.proto` — `package applicant`, service `ApplicantService`;
+callers generate their stubs from it (NestJS: `package: 'applicant'`). Failures come back as gRPC status codes:
+`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant, `FAILED_PRECONDITION` for `GetNextApplicant` on a shift that is no longer running.
+
 `ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
-shift to its next applicant. Generates the applicant if the session has none pending.
+shift to its next applicant. Every call mints a new applicant for the shift (same as `POST /applicants`),
+so Session Service calls it only when the Moderator is ready for the next one.
 
 ```proto
 rpc GetNextApplicant (NextApplicantRequest) returns (NextApplicantResponse);
@@ -675,18 +693,20 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:0.3.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+   - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
+   - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8081` (REST)
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:0.3.0` (public)
+**DockerHub:** `kutulin/pad-17-applicant-service:2.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -770,7 +790,22 @@ address, if `course_registration` is empty, or if the body tries to set `student
 ```
 **Errors:** `400 VALIDATION_FAILED` if the id is not a UUID, `404 APPLICANT_NOT_FOUND`.
 
+The following two error responses apply to every REST endpoint above:
+
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+
 **Incoming gRPC**
+
+Served on port `9090` inside the Compose network (`credential-service:9090`), not published on the host. The
+contract is `services/credential-service/src/main/proto/credential.proto` — `package credential`, service `CredentialService`;
+callers generate their stubs from it (NestJS: `package: 'credential'`). Failures come back as gRPC status codes:
+`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant.
 
 `CredentialService.GetCredentials` - returns the applicant's documents and their validity so
 Moderation can check a decision against the rules. Server-to-server, so it does not pass through
@@ -850,18 +885,20 @@ Idempotent on `applicant_id`.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:0.3.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+   - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
+   - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8082` (REST)
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
 
-**DockerHub:** `kutulin/pad-17-credential-service:0.3.0` (public)
+**DockerHub:** `kutulin/pad-17-credential-service:2.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -910,6 +947,23 @@ Holds no applicant data — evaluates whatever it's handed, per request.
 { "error": { "code": "VALIDATION_FAILED", "message": "Request body is malformed" } }
 ```
 
+The following two error responses apply to both `GET /rules` and `PUT /rules`:
+ 
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+ 
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+ 
+ ### Timeout and concurrency limit
+
+- **Task timeout: 5 seconds.** Both REST handlers return a `Callable`, so a slower request is answered with `504 REQUEST_TIMEOUT` (`spring.mvc.async.request-timeout=5000`).
+- **Concurrent task limit: 20 requests in flight.** The 21st gets `429 TOO_MANY_REQUESTS` immediately. `ConcurrencyLimitFilter` holds a slot until the async request completes.
+
+These limits cover the REST API only, not the gRPC `EvaluateApplicant` endpoint.
+
 ### Rule condition format
 
 A `condition` string has the shape `<field> <operator> <value>`. **Matching means the applicant violates the rule** — write conditions to describe the disqualifying state, not the allowed one.
@@ -941,15 +995,15 @@ No events published or consumed — Server Rules Service doesn't participate in 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.1.1`
+1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
-**Ports:** `8080` (REST), `9090` (gRPC)
+**Ports:** gRPC on `9091` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/server-rules-service:v0.1.1` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/server-rules-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -958,6 +1012,9 @@ No events published or consumed — Server Rules Service doesn't participate in 
 ### University Record Service
 
 **Client-facing REST (via API Gateway)**
+
+The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never sees a token; its REST port is not published in the shared stack.
+
 
 `POST /records` - generate ground-truth records for a new applicant, when University Record Service is the first of the three applicant-side services to be contacted. It mints the applicant_id and the deception, then propagates both through record_initialized.
 ```json
@@ -979,13 +1036,14 @@ No events published or consumed — Server Rules Service doesn't participate in 
 // Response 422 — session_id is missing or blank
 { "error": { "code": "VALIDATION_FAILED", "message": "human text" } }
 ```
-Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` (Not yet enforced — see the service's own README.)
+The session is not verified yet (`404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` are planned for a future lab).
+
 
 
 `GET /sessions/{session_id}/records/{applicant_id}` - fetch the records the calling player is assigned to see, for this applicant, in this session
 ```json
 // Request
-// header: Authorization: Bearer <JWT>   (identifies the calling player)
+// header: X-Player-Id: <player id>   (set by the Gateway after validating the token)
 
 // Response 200
 {
@@ -993,7 +1051,7 @@ Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_
   "data": { "enrollment": { "enrollment_status": "string" } }
 }
 
-// Response 401 — missing or malformed Authorization header / token
+// Response 401 — X-Player-Id header is missing (the request did not come through the Gateway)
 { "error": { "code": "UNAUTHORIZED", "message": "human text" } }
 
 // Response 403 — player has no scope assignment for this session
@@ -1002,16 +1060,23 @@ Errors: `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_
 // Response 404 — no record exists for this applicant
 { "error": { "code": "VALIDATION_FAILED", "message": "applicant not found" } }
 ```
-The service no longer trusts a client-supplied `scope` value. Instead it looks up which scope(s)
-the calling player (from the JWT) was assigned via `AssignScopes` — a gRPC call made by Server
-Moderation Session Service when the shift starts — and returns only that data. A player who
-wasn't in the session, or has no assignment, gets `403`. This is the actual enforcement point
-for the partitioning promised in Service Boundaries.
+The service looks up which scope(s) the calling player was assigned via `AssignScopes` and returns only that data. This is the enforcement point for the partitioning promised in Service Boundaries.
+
+Both endpoints share a **5 second task timeout** and a **limit of 20 concurrent requests**:
+
+```json
+// Response 429 — too many concurrent requests in flight
+{ "error": { "code": "TOO_MANY_REQUESTS", "message": "Too many concurrent requests" } }
+ 
+// Response 504 — request exceeded the timeout
+{ "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
+```
+These apply to REST only, not to the gRPC methods.
 
 
-**Incoming gRPC (called by Server Moderation Session Service at shift start)**
+**Incoming gRPC**
 
-`AssignScopes`
+`AssignScopes` — called by Server Moderation Session Service at shift start. Idempotent per `(session_id, player_id)`: a repeated call replaces the stored scopes.
 ```proto
 rpc AssignScopes (AssignScopesRequest) returns (AssignScopesResponse);
 message AssignScopesRequest {
@@ -1024,9 +1089,15 @@ message PlayerScopeAssignment {
 }
 message AssignScopesResponse { bool success = 1; }
 ```
+
 Idempotent per `(session_id, player_id)` — a repeated call for the same pair replaces the stored scopes rather than duplicating the row.
 
-**Events published (RabbitMQ)**
+`GetRecordSnapshot` — called by Moderation Service. Returns the full, unfiltered record regardless of player scopes; `NOT_FOUND` if the applicant has no record. See Moderation Service below for the message shapes.
+
+
+**Events (RabbitMQ)**
+
+All Team 17 services use one shared topic exchange, `pad17.events`; routing keys are the event names.
 
 `record_initialized` - published when University Record Service is the first to be contacted for a new applicant.
 ```json
@@ -1041,58 +1112,26 @@ Idempotent per `(session_id, player_id)` — a repeated call for the same pair r
   "previously_banned": false
 }
 ```
-Consumed by Applicant Service and Credential Service to build their own data for this applicant.
+Consumed by Applicant Service and Credential Service.
 
-**Events consumed (RabbitMQ)**
+`applicant_initialized` and `credential_initialized` (consumed) - published by Applicant Service / Credential Service when they are contacted first instead; payloads as in those services' sections above. University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant. Idempotent on `applicant_id`.
 
-`applicant_initialized` - published by Applicant Service when it's contacted first instead.
-```json
-{
-  "applicant_id": "uuid",
-  "deception": "none | false_major | false_year | impersonation | expired_status",
-  "name": "string",
-  "student_id": "string",
-  "major": "string",
-  "year": 0,
-  "university_status": "faf_student | other_major | teaching_assistant | staff | alumni | outsider",
-  "courses": ["string"],
-  "role": "string"
-}
-```
+Not yet consuming `decision_made`, so `previously_banned` isn't updated when a Moderator bans an applicant. Planned for a future lab.
 
-`credential_initialized` - published by Credential Service when it's contacted first instead.
-```json
-{
-  "applicant_id": "uuid",
-  "deception": "none | false_major | false_year | impersonation | expired_status",
-  "name": "string",
-  "student_id": "string",
-  "student_id_doc": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
-  "university_email": "string",
-  "enrollment_confirmation": { "valid": true, "issue": "none | expired | forged | inconsistent | incomplete" },
-  "course_registration": ["string"]
-}
-```
-University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant itself. Idempotent on `applicant_id`.
-
-Not yet consuming `decision_made` (see Moderation Service below) — planned for a future lab, so previously_banned isn't updated when a Moderator bans an applicant
 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.1.1`
+1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
-   - `JWT_SECRET`
-3. Run via the team's `docker-compose.yml` (see `deploy/` in this CPR) — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** `8080` (REST), `9090` (gRPC)
+**Ports:** gRPC on `9092` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/university-record-service:v0.1.1` (public, `linux/amd64` + `linux/arm64`)
-
-**Note:** `JWT_SECRET` must match whatever signing secret Player Service uses once real authentication is wired in (Lab 2+) — currently a local placeholder for testing the scope-filtering mechanism only.
+**DockerHub:** `anastasiatiganescu/university-record-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -1106,7 +1145,7 @@ For each submitted verdict, it gathers applicant information, credentials, and u
 
 The Moderation Service does not define the rules that determine whether an applicant should be accepted, rejected, flagged, or banned. That responsibility belongs to the Server Rules Service.
 
-For Lab 1, dependencies on other microservices and RabbitMQ are implemented using mocks. The interfaces are kept separate so they can later be replaced by gRPC clients and a RabbitMQ publisher.
+The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange `pad17.events` with routing key `shift_ended`. A message that fails validation or processing is rejected without requeue. The handling logic (`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
 
 #### Requirements
 
@@ -1163,7 +1202,7 @@ http://localhost:3000
 The service and its PostgreSQL database can be started using Docker Compose:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose up -d
 ```
 
 The Moderation Service runs on port `3000` inside its container and is exposed on the host at:
@@ -1192,13 +1231,13 @@ PostgreSQL data is stored in a persistent Docker volume.
 To check the containers:
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps
+docker compose ps
 ```
 
 To stop the service:
 
 ```bash
-docker compose -f deploy/docker-compose.yml down
+docker compose down
 ```
 
 #### Communication
@@ -1571,7 +1610,7 @@ http://localhost:3000
 The recommended way to run the complete service is with Docker Compose:
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose up -d
 ```
 
 The Discord DMs Service runs on port `3000` inside its container and is exposed on the host at:
@@ -1600,13 +1639,13 @@ PostgreSQL data is stored in a persistent Docker volume.
 To check the containers:
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps
+docker compose ps
 ```
 
 To stop the service:
 
 ```bash
-docker compose -f deploy/docker-compose.yml down
+docker compose down
 ```
 
 #### Communication
@@ -1897,7 +1936,7 @@ Lowercase, hyphen-separated, `<service>` matches the directory under `services/`
 
 - feature branch → `dev`: **squash merge**, so `dev` keeps one commit per task
 - `dev` → `main`: **merge commit**, so the integration history is preserved
-- **1 approval required** — a team of four stalls on two
+- **1 approval required** — a team of four stalls on two (!only applied to the CPR and Gateway repositories)
 - The branch is deleted after merge
 
 Rebase on `dev` before opening a PR; do not merge `dev` into your feature branch.
@@ -1915,7 +1954,7 @@ Link Applicant and Credential services as submodules
 
 Every PR states:
 
-1. **What** changed
+1. **What changed**
 2. **Why** — the task or decision behind it
 3. **How it was tested** — commands run, or "docs only"
 4. **Linked task** from the project board
@@ -1929,6 +1968,7 @@ Semantic versioning, tagged on `main` after each lab is presented:
 ```
 v0.1.0   Lab 0 — planning and contract
 v0.2.0   Lab 1 — first running services
+v0.3.0   Lab 2 — Gateway introduced
 ```
 
 Service repositories are tagged independently once they publish images; the CPR tag records
