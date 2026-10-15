@@ -162,15 +162,31 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.2.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.3.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
       DISCORD_DMS_PUBLIC_URL: http://localhost:8086
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
+      DISCOVERY_URL: http://discovery-service:8000
+    depends_on:
+      discovery-service:
+        condition: service_healthy
     ports:
       - "8090:8000"
+
+ # ---------------------------------------------------------------- discovery
+  discovery-service:
+    image: ${DISCOVERY_IMAGE}
+    container_name: pad17-discovery-service
+    healthcheck:
+      test: ["CMD", "python", "-c",
+            "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
@@ -196,7 +212,7 @@ services:
         condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.2.0}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.2.1}
     container_name: pad17-server-moderation-session-service
     environment:
       DB_HOST: server-moderation-session-db
@@ -262,21 +278,22 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0}
-    container_name: pad17-server-rules-service
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.3.0}
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
       DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
-    ports:
-      - "9091:9090"
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+    deploy:
+      replicas: 2
     depends_on:
       server-rules-db:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.2.0}
-    container_name: pad17-university-record-service
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.3.0}
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
       DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
@@ -285,12 +302,18 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-    ports:
-      - "9092:9090"
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_NAME: university-record-service
+      SERVICE_HTTP_PORT: 8080
+      SERVICE_GRPC_PORT: 9090
+    deploy:
+      replicas: 2
     depends_on:
       university-record-db:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      discovery-service:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
