@@ -191,7 +191,6 @@ services:
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
     image: janetag/player-service:${PLAYER_VERSION:-0.3.0}
-    container_name: pad17-player-service
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -218,7 +217,6 @@ services:
 
   server-moderation-session-service:
     image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.3.0}
-    container_name: pad17-server-moderation-session-service
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
