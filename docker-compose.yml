@@ -190,8 +190,7 @@ services:
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.2.0}
-    container_name: pad17-player-service
+    image: janetag/player-service:${PLAYER_VERSION:-0.3.0}
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -205,15 +204,19 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT: 3000
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+    deploy:
+      replicas: 2
     depends_on:
       player-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.2.1}
-    container_name: pad17-server-moderation-session-service
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.3.0}
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
@@ -228,10 +231,15 @@ services:
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
       DISCORD_DMS_GRPC_URL: discord-dms-service:9090
       PORT: 3001
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+    deploy:
+      replicas: 2
     depends_on:
       server-moderation-session-db:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      discovery-service:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 2 (Catalin)
