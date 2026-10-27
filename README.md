@@ -957,12 +957,34 @@ The following two error responses apply to both `GET /rules` and `PUT /rules`:
 { "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
 ```
  
+ ### Health, discovery and observability
+
+ `GET /health` checks the database and reports the service name, instance
+ hostname, database status, and REST/gRPC load. It returns `200` when the
+ service is healthy and `503` when the database check fails.
+
+ Each instance registers both its REST and gRPC endpoints with Service Discovery
+ at startup, retries registration when Discovery is temporarily unavailable,
+ refreshes the registration through heartbeats, and deregisters during graceful
+ shutdown. Requests, gRPC evaluations, health failures, and discovery lifecycle
+ events are logged with request IDs and durations.
+
+ The shared Compose deployment uses:
+
+ ```properties
+ SERVICE_DISCOVERY_URL=http://discovery-service:8000
+ SERVICE_NAME=server-rules-service
+ SERVICE_HTTP_PORT=8080
+ SERVICE_GRPC_PORT=9090
+ SERVICE_HEARTBEAT_SECONDS=15
+ ```
+
  ### Timeout and concurrency limit
 
 - **Task timeout: 5 seconds.** Both REST handlers return a `Callable`, so a slower request is answered with `504 REQUEST_TIMEOUT` (`spring.mvc.async.request-timeout=5000`).
 - **Concurrent task limit: 20 requests in flight.** The 21st gets `429 TOO_MANY_REQUESTS` immediately. `ConcurrencyLimitFilter` holds a slot until the async request completes.
 
-These limits cover the REST API only, not the gRPC `EvaluateApplicant` endpoint.
+These limits cover the REST API and the gRPC `EvaluateApplicant` endpoint.
 
 ### Rule condition format
 
@@ -995,21 +1017,80 @@ No events published or consumed — Server Rules Service doesn't participate in 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.2.0`
+1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
-**Ports:** gRPC on `9091` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
+**Ports:** REST and gRPC use ports `8080` and `9090` inside the Compose
+network. Neither port is published directly in the shared stack; client
+requests go through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/server-rules-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/server-rules-service:v0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
 ---
 
 ### University Record Service
+
+Lab 3 – Scaling Up. Multiple instances can run behind the Gateway. Each
+instance exposes `GET /health`, writes structured logs, registers with Service
+Discovery on startup, refreshes its registration through heartbeats, and
+removes failing Session Service instances after the circuit-breaker threshold.
+
+### Health and logging
+
+`GET /health` is used by Service Discovery and the Gateway. It returns `200`
+when the database is available and `503` when the database is unavailable. The
+response includes the instance hostname, database and RabbitMQ checks, and
+REST/gRPC load:
+
+```json
+{
+  "status": "UP",
+  "service": "university-record-service",
+  "instance": "container-id",
+  "checks": { "database": "up", "rabbitmq": "up" },
+  "load": {
+    "rest": { "active": 0, "max": 20 },
+    "grpc": { "active": 0, "max": 20 },
+    "utilization": 0.0
+  }
+}
+```
+
+Only the database determines the overall health status. A RabbitMQ failure is
+reported and logged, but does not by itself change the service status to
+`DOWN`. The service logs request start/completion, status, duration, business
+events, RabbitMQ processing, gRPC calls, upstream Session Service failures,
+instance removals, discovery registration, and concurrency-limit rejections.
+Requests preserve an incoming `X-Request-Id` or generate one and include it in
+the response and correlated log entries.
+
+### Service Discovery registration
+
+At startup, each instance sends `POST /register` to Service Discovery with its
+service name, container `HOSTNAME` instance ID, resolved host address, internal
+HTTP port, internal gRPC port, and `/health` path. Registration retries with
+backoff if Discovery is unavailable and repeats every 15 seconds by default as
+a heartbeat. During graceful shutdown, the instance deregisters with
+`DELETE /services/{serviceName}/{instanceId}`. A crashed instance stops sending
+heartbeats and must be removed by Service Discovery's health checks.
+
+The shared Compose configuration uses:
+
+```properties
+SERVICE_DISCOVERY_URL=http://discovery-service:8000
+SERVICE_NAME=university-record-service
+SERVICE_HTTP_PORT=8080
+SERVICE_GRPC_PORT=9090
+SERVICE_HEARTBEAT_SECONDS=15
+```
+
+Replicas share PostgreSQL and RabbitMQ, use the container `HOSTNAME` as their
+unique identity, and must not publish a fixed host port.
 
 **Client-facing REST (via API Gateway)**
 
@@ -1122,18 +1203,30 @@ Not yet consuming `decision_made`, so `previously_banned` isn't updated when a M
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.2.0`
+1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** gRPC on `9092` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
+**Ports:** gRPC uses port `9090` inside the container. The shared Compose
+configuration does not publish a fixed host port for scaled instances; client
+requests go through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/university-record-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/university-record-service:v0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
+To run multiple instances in the shared Compose deployment, scale by service
+name. Do not publish fixed host ports for these services; replicas communicate
+over the Compose network:
+
+```bash
+docker compose up -d \
+  --scale server-rules-service=2 \
+  --scale university-record-service=2
+```
 
 ---
 
