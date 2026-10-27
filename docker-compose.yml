@@ -292,6 +292,10 @@ services:
       DB_USERNAME: ${SERVER_RULES_DB_USER}
       DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_NAME: server-rules-service
+      SERVICE_HTTP_PORT: 8080
+      SERVICE_GRPC_PORT: 9090
+      SERVICE_HEARTBEAT_SECONDS: 15
     deploy:
       replicas: 2
     depends_on:
@@ -314,6 +318,7 @@ services:
       SERVICE_NAME: university-record-service
       SERVICE_HTTP_PORT: 8080
       SERVICE_GRPC_PORT: 9090
+      SERVICE_HEARTBEAT_SECONDS: 15
     deploy:
       replicas: 2
     depends_on:
