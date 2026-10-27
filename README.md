@@ -825,10 +825,60 @@ initialized the applicant itself, and takes `deception` from that event rather t
 own. That is what keeps the claim, the documents and the records describing the same lie.
 Idempotent on `applicant_id` — an applicant is only initialized once, however many of the events arrive.
 
+**Status endpoint (Lab 3)**
+
+`GET /health` - this instance's state, polled by Service Discovery inside the Compose network. It is
+not routed through the Gateway.
+```json
+// Response 200, or 503 once a check is DOWN
+{
+  "status": "UP",
+  "service": "applicant-service",
+  "instance": "3f2a9c1b7d4e",
+  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "load": { "active": 3, "max": 20, "utilization": 0.15 }
+}
+```
+`load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
+1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
+threshold.
+
+**Service Discovery and replicas (Lab 3)**
+
+Every replica registers on startup:
+```json
+// POST {SERVICE_DISCOVERY_URL}/register
+{
+  "service_name": "applicant-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8081,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+```
+`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
+exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
+instance removes itself (`DELETE /services/applicant-service/{instance_id}`) once it is DOWN and on
+shutdown, and registers again once it is back UP.
+
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
+round-robin is visible from the client: two requests in a row to `/applicants` show two different ids.
+
+The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
+them, so nothing depends on which replica a request or an event reaches. `applicant-service:9090`
+resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+`grpc_port`).
+
+Applicant Service makes no synchronous calls to other services - shifts come from the session mock, and
+everything else arrives through RabbitMQ - so it has no circuit breaker of its own. The breakers
+belong to its callers: the Gateway for REST, Server Moderation Session and Moderation Services for gRPC.
+
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.1.1`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:3.0.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -837,11 +887,13 @@ Idempotent on `applicant_id` — an applicant is only initialized once, however 
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+   - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
+   - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:2.1.1` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:3.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -1017,10 +1069,60 @@ initialized the applicant itself, and forges them according to that event's `dec
 document contradicts the records in a specific, discoverable way instead of at random.
 Idempotent on `applicant_id`.
 
+**Status endpoint (Lab 3)**
+
+`GET /health` - this instance's state, polled by Service Discovery inside the Compose network. It is
+not routed through the Gateway.
+```json
+// Response 200, or 503 once a check is DOWN
+{
+  "status": "UP",
+  "service": "credential-service",
+  "instance": "3f2a9c1b7d4e",
+  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "load": { "active": 3, "max": 20, "utilization": 0.15 }
+}
+```
+`load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
+1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
+threshold.
+
+**Service Discovery and replicas (Lab 3)**
+
+Every replica registers on startup:
+```json
+// POST {SERVICE_DISCOVERY_URL}/register
+{
+  "service_name": "credential-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8082,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+```
+`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
+exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
+instance removes itself (`DELETE /services/credential-service/{instance_id}`) once it is DOWN and on
+shutdown, and registers again once it is back UP.
+
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
+round-robin is visible from the client: two requests in a row to `/credentials` show two different ids.
+
+The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
+them, so nothing depends on which replica a request or an event reaches. `credential-service:9090`
+resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+`grpc_port`).
+
+Credential Service makes no synchronous calls to other services - shifts come from the session mock, and
+everything else arrives through RabbitMQ - so it has no circuit breaker of its own. The breakers
+belong to its callers: the Gateway for REST, Moderation Service for gRPC.
+
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.1.1`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:3.0.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -1029,11 +1131,13 @@ Idempotent on `applicant_id`.
    - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+   - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
+   - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
 
-**DockerHub:** `kutulin/pad-17-credential-service:2.1.1` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:3.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
