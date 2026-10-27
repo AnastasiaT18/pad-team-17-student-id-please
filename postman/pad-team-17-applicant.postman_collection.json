@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Applicant Service",
-    "description": "Applicant Service - Team 17 \"Student ID, please\".\n\nOwns an applicant's claimed identity. Covers the full CRUD, every error path, and the mocked Session Service lookup (two fixed session ids return 404 and 409).\n\nEvery response is checked for the absence of `deception`: it is the answer to the puzzle the players solve, so leaking it would end the game.\n\nRun the service first - see docker-compose.yml. Requests are ordered to run start to finish: creating an applicant stores its id for the requests that follow.\n\nLab 3: the two round-robin requests show the Gateway alternating between the two replicas - each response names the replica that answered in X-Instance-Id.",
+    "description": "Applicant Service - Team 17 \"Student ID, please\".\n\nOwns an applicant's claimed identity. Covers the full CRUD, every error path, and the shift check against Server Moderation Session Service (a shift that does not exist is 404, one that has not started is 409).\n\nEvery response is checked for the absence of `deception`: it is the answer to the puzzle the players solve, so leaking it would end the game.\n\nRun the service first - see docker-compose.yml. Requests are ordered to run start to finish: the first three open a real shift, and creating an applicant stores its id for the requests that follow.\n\nLab 3: the two round-robin requests show the Gateway alternating between the two replicas - each response names the replica that answered in X-Instance-Id.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -48,6 +48,102 @@
     }
   ],
   "item": [
+    {
+      "name": "Shift - open one (Server Moderation Session Service)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sessions",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        },
+        "description": "Lab 3. Applicant Service asks Server Moderation Session Service over gRPC whether a shift is running before an applicant joins it, so the run opens a real shift first. The player this collection logged in becomes its Moderator."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('the shift is open but not started', () => pm.expect(body.status).to.eql('created'));",
+              "pm.collectionVariables.set('session_id', body.session_id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Shift - start it",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sessions/{{session_id}}/start",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sessions",
+            "{{session_id}}",
+            "start"
+          ]
+        },
+        "description": "Starts the shift, as its Moderator. Session Service then asks Applicant Service for the shift's first applicant (GetNextApplicant), and Applicant Service checks this same shift with Session Service before it mints one."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('the shift is running', () => pm.expect(pm.response.json().status).to.eql('active'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Shift - open another one and never start it",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sessions",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        },
+        "description": "A shift that exists but has not started: Session Service reports it as created, so creating applicant in it is 409 SESSION_NOT_ACTIVE."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('it stays not started', () => pm.expect(body.status).to.eql('created'));",
+              "pm.collectionVariables.set('unstarted_session_id', body.session_id);"
+            ]
+          }
+        }
+      ]
+    },
     {
       "name": "Create applicant",
       "request": {
@@ -421,7 +517,7 @@
             "applicants"
           ]
         },
-        "description": "Session Service is mocked until it exists; this id is configured as missing.",
+        "description": "No shift has this id, so Session Service answers NOT_FOUND.",
         "body": {
           "mode": "raw",
           "raw": "{\n  \"session_id\": \"{{unknown_session_id}}\"\n}"
@@ -461,10 +557,10 @@
             "applicants"
           ]
         },
-        "description": "Session Service is mocked until it exists; this id is configured as not running.",
+        "description": "This shift exists but has not started - Session Service reports it as created - so it takes no new applicants.",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"session_id\": \"{{ended_session_id}}\"\n}"
+          "raw": "{\n  \"session_id\": \"{{unstarted_session_id}}\"\n}"
         }
       },
       "response": [],
@@ -623,7 +719,7 @@
     },
     {
       "key": "session_id",
-      "value": "3f0d4c6e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+      "value": ""
     },
     {
       "key": "applicant_id",
@@ -634,8 +730,8 @@
       "value": "00000000-0000-0000-0000-000000000404"
     },
     {
-      "key": "ended_session_id",
-      "value": "00000000-0000-0000-0000-0000000e0d0d"
+      "key": "unstarted_session_id",
+      "value": ""
     },
     {
       "key": "token",
