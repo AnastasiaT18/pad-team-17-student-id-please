@@ -245,7 +245,7 @@ services:
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-3.0.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-3.1.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
@@ -258,6 +258,8 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8081
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
+      SESSION_DIRECTORY: grpc
     deploy:
       replicas: 2
     depends_on:
@@ -269,7 +271,7 @@ services:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-3.0.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-3.1.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432
@@ -282,6 +284,8 @@ services:
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8082
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
+      SESSION_DIRECTORY: grpc
     deploy:
       replicas: 2
     depends_on:
