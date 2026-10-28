@@ -319,6 +319,8 @@ services:
       SERVICE_HTTP_PORT: 8080
       SERVICE_GRPC_PORT: 9090
       SERVICE_HEARTBEAT_SECONDS: 15
+      SESSION_CLIENT: grpc
+      SESSION_SERVICE_NAME: server-moderation-session-service
     deploy:
       replicas: 2
     depends_on:
