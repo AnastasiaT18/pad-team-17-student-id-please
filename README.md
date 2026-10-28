@@ -74,6 +74,15 @@ the current session.
 
 Arrows point from the service that initiates a call to the service it calls.
 
+What Lab 3 added is in orange. Every service runs as two replicas, drawn as two stacked boxes:
+each instance registers with Service Discovery, which checks its health and load every 5 seconds
+and alerts the developers' Telegram group when an instance goes down, recovers, reaches a critical
+load or is removed. Callers that look a service up in Service Discovery send each request to its
+next healthy instance in turn. CB marks a call guarded by a circuit breaker: when it trips, the
+caller removes that instance from Service Discovery. Dashed arrows are RabbitMQ events, from the
+service that publishes the event to the one that consumes it. The diagram's earlier pages, in the
+same file, keep the previous labs' versions.
+
 New applicants can enter through any of Applicant Service, Credential Service or
 University Record Service. Whichever is contacted first mints the `applicant_id`,
 decides that applicant's `deception`, and publishes its `*_initialized` event; the
