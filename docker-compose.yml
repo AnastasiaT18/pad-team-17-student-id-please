@@ -178,11 +178,11 @@ services:
 
  # ---------------------------------------------------------------- discovery
   discovery-service:
-    image: ${DISCOVERY_IMAGE}
+    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
     container_name: pad17-discovery-service
     healthcheck:
       test: ["CMD", "python", "-c",
-            "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 10
