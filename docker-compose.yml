@@ -366,12 +366,13 @@ services:
 
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-3.0.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
     container_name: pad17-discord-dms-service
 
     environment:
       PORT: 3000
       GRPC_URL: 0.0.0.0:9090
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
 
       DB_HOST: discord-dms-db
       DB_PORT: 5432
@@ -387,6 +388,8 @@ services:
 
     depends_on:
       discord-dms-db:
+        condition: service_healthy
+      discovery-service:
         condition: service_healthy
 
 volumes:
