@@ -178,11 +178,11 @@ services:
 
  # ---------------------------------------------------------------- discovery
   discovery-service:
-    image: ${DISCOVERY_IMAGE}
+    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
     container_name: pad17-discovery-service
     healthcheck:
       test: ["CMD", "python", "-c",
-            "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -345,11 +345,12 @@ services:
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-3.0.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.4.0}
     container_name: pad17-moderation-service
 
     environment:
       PORT: 3000
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
 
       DB_HOST: moderation-db
       DB_PORT: 5432
@@ -372,15 +373,18 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-3.0.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
     container_name: pad17-discord-dms-service
 
     environment:
       PORT: 3000
       GRPC_URL: 0.0.0.0:9090
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
 
       DB_HOST: discord-dms-db
       DB_PORT: 5432
@@ -396,6 +400,8 @@ services:
 
     depends_on:
       discord-dms-db:
+        condition: service_healthy
+      discovery-service:
         condition: service_healthy
 
 volumes:
