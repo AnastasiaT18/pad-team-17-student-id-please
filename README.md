@@ -159,6 +159,44 @@ Data lives in one database per service. Services never touch each other's tables
 
 ### Player Service
 
+**Authentication**
+
+Player Service does not verify tokens on incoming requests. The Gateway validates the Bearer
+token and passes the caller's id in the `X-Player-Id` header, which this service trusts. It must only be reachable through the Gateway.
+
+Every endpoint except `POST /players` and `POST /players/login` requires a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or invalid token returns `401 UNAUTHORIZED`.
+
+`POST /players/login` still signs the token, so `JWT_SECRET` must be the same value the Gateway uses to verify it.
+ 
+**Client-facing REST (via API Gateway)**
+
+**Health check**
+
+`GET /health` - reports whether this instance is up. It needs no token, and it is not counted
+against the concurrent request limit, so it keeps answering when the service is overloaded.
+It is meant for Service Discovery, not for clients.
+
+```json
+// Response 200
+{
+  "status": "UP",
+  "service": "player-service",
+  "instance": "2742769a5415",
+  "load": { "utilization": 0.04 }
+}
+
+// Response 503 (the database is unreachable)
+{ "status": "DOWN", "service": "player-service", "instance": "2742769a5415" }
+```
+
+- `instance` is the container id (`HOSTNAME`), so replicas of the service can be told apart.
+- `utilization` is the busy request slots divided by `MAX_CONCURRENT_REQUESTS` (0.0 to 1.0).
+
+**Service Discovery**
+
+On startup the service registers itself with Service Discovery (`POST /register`) with its
+service name (`player-service`), instance id (`HOSTNAME`), host and port. The service registers again every `SERVICE_HEARTBEAT_MS` (default 20000), so an instance that was removed from Discovery, or a Discovery that restarted, gets it back.
+ 
 `POST /players` - register a new player account
 ```json
 // Request
@@ -182,7 +220,7 @@ Data lives in one database per service. Services never touch each other's tables
 **Errors:** `401 INVALID_CREDENTIALS` if the email/password combination is wrong.
  
  
-`GET /players/{player_id}` - fetch profile
+`GET /players/{player_id}` - fetch profile (requires auth)
 ```json
 // Response 200
 {
@@ -219,7 +257,7 @@ Data lives in one database per service. Services never touch each other's tables
 **Errors:** `422 VALIDATION_FAILED` if a field is malformed, `403 FORBIDDEN` if the caller isn't this player, `404 PLAYER_NOT_FOUND`.
  
  
-`GET /players/{player_id}/friends` - list a player's friends
+`GET /players/{player_id}/friends` - list a player's friends (requires auth)
 ```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
@@ -284,11 +322,11 @@ Applied per `player_id` to update `xp`, `level`, `shifts_completed`, `disciplina
 Idempotent on `(session_id, player_id)`.
  
  
-For Lab 1, the RabbitMQ consumer is not yet wired to a real broker. The event contract and the
-handling logic (`PlayersService.applyShiftEnded`) are implemented and covered by a unit test
-(`players.service.spec.ts`) that drives the method directly with a `shift_ended`-shaped payload,
-since Session Service's own publisher is also mocked for Lab 1.
- 
+The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange
+`pad17.events` (override with `RABBITMQ_EXCHANGE`) with routing key `shift_ended`. A message that
+fails validation or processing is rejected without requeue. The handling logic
+(`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
+
 ## Persistence
  
 The Player Service owns its PostgreSQL database.
@@ -304,7 +342,7 @@ No other microservice directly accesses the Player Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.2.0`
+1. Pull the public image — `docker pull janetag/player-service:0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -315,7 +353,9 @@ No other microservice directly accesses the Player Service database.
 
 **Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
 
-**DockerHub:** `janetag/player-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so an instance removed by a caller's circuit breaker comes back by itself.
+
+**DockerHub:** `janetag/player-service:0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 
@@ -327,16 +367,19 @@ No other microservice directly accesses the Player Service database.
 
 **Client-facing REST (via API Gateway)**
 
-The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. A request without `X-Player-Id` (one that did not come through the Gateway) returns `401 UNAUTHORIZED`.
+The Gateway validates the Bearer token and passes the caller's id in the `X-Player-Id` header, which this service trusts. It must only be reachable through the Gateway.
  
 `POST /sessions` - create a session
 ```json
 // Response 201
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
 ```
+Optional header `Idempotency-Key: <string, up to 200 characters>`. If the same moderator sends the
+same key again, no new session is created: the response is again `201` and shows the existing
+session in its current state. Without the header, every call creates a new session. This makes
+it safe to retry a `POST /sessions` that timed out (`504`).
 
-
-`POST /sessions/{session_id}/join` - the calling player (identified by X-Player-Id) joins an existing, not-yet-started session as Junior Moderator
+`POST /sessions/{session_id}/join` - the calling player (identified by the `X-Player-Id` header set by the Gateway) joins an existing, not-yet-started session as Junior Moderator
 ```json
 // Response 200
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
@@ -345,14 +388,19 @@ The Gateway validates the `Authorization: Bearer <token>` header and does not fo
 **Errors:** `404 SESSION_NOT_FOUND`, `409 SESSION_ALREADY_STARTED` if the session is no longer in `created` status, `409 ALREADY_JOINED` if the calling player is already in this session.
 
 
-`POST /sessions/{session_id}/start` - mark the session active, start the shift, and assign each Junior Moderator the record scope(s) they'll have access to for the whole shift (via
-`UniversityRecordService.AssignScopes`, below).
+`POST /sessions/{session_id}/start` - mark the session active, assign each Junior Moderator
+their record scope(s) through `UniversityRecordService.AssignScopes`, provision Discord
+channels and participant permissions through `DiscordDmsService.ProvisionChannels`, and
+load the first applicant through `ApplicantService.GetNextApplicant`.
+
 ```json
 // Response 200
 { "session_id": "uuid", "status": "active", "started_at": "RFC3339" }
 ```
 
-**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended. `503 UPSTREAM_UNAVAILABLE` if a downstream service is unreachable or too slow, `502 UPSTREAM_ERROR` if it rejects the call.
+**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended, `503 UPSTREAM_UNAVAILABLE` if a downstream service is unreachable or too slow, `502 UPSTREAM_ERROR` if it rejects the call.
+
+If a downstream call fails, the session is put back to `created` and the Moderator can call `start` again.
 
 
 `GET /sessions/{session_id}` - full state
@@ -397,7 +445,7 @@ The Gateway validates the `Authorization: Bearer <token>` header and does not fo
 
 Triggers publishing `shift_ended` (below).
 
-**Outgoing gRPC calls (needs an answer)**
+**Outgoing gRPC calls**
 
 `ApplicantService.GetNextApplicant`
 ```proto
@@ -408,19 +456,27 @@ message NextApplicantResponse { string applicant_id = 1; }
 
 `DiscordDmsService.ProvisionChannels`
 ```proto
-rpc ProvisionChannels (ProvisionChannelsRequest) returns (ProvisionChannelsResponse);
+rpc ProvisionChannels (ProvisionChannelsRequest)
+    returns (ProvisionChannelsResponse);
+
 message ProvisionChannelsRequest {
   string session_id = 1;
   repeated Participant participants = 2;
 }
+
 message Participant {
   string player_id = 1;
   string role = 2; // moderator | junior_moderator
   repeated string scopes = 3; // enrollment | courses | schedule | messages
 }
-message ProvisionChannelsResponse { bool success = 1; }
+
+message ProvisionChannelsResponse {
+  bool success = 1;
+}
 ```
-The Moderator receives all scopes; each Junior Moderator receives only their assigned scope(s).
+
+For Discord channel permissions, the Moderator receives all available scopes, while each
+Junior Moderator receives only their assigned scope(s).
 
 `UniversityRecordService.AssignScopes`
 ```proto
@@ -435,6 +491,33 @@ message PlayerScopeAssignment {
 }
 message AssignScopesResponse { bool success = 1; }
 ```
+
+When a gRPC URL is empty, the service uses a local mock client, so the REST API can run without
+all upstream services. In the team stack, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`
+and `DISCORD_DMS_GRPC_URL` are all set and use real gRPC.
+
+**Incoming gRPC calls**
+
+The service also runs a gRPC server on `GRPC_PORT` (default `9090`), so other services can check a session's status. It is not exposed through the Gateway.
+
+`SessionService.GetSessionStatus` (called by University Record Service before creating a record; Applicant and Credential can reuse it)
+```proto
+service SessionService {
+  rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+}
+
+message GetSessionStatusRequest {
+  string session_id = 1;
+}
+
+message GetSessionStatusResponse {
+  string status = 1;   // "created" | "active" | "ended"
+}
+```
+
+An unknown session (or an id that is not a valid UUID) is answered with gRPC status `NOT_FOUND`. The proto file is `src/proto/session.proto`; callers use the same file.
+
+When more than `MAX_CONCURRENT_REQUESTS` gRPC calls are in flight, new calls are answered with gRPC status `RESOURCE_EXHAUSTED`.
 
 **Events published (RabbitMQ)**
 
@@ -463,6 +546,56 @@ message AssignScopesResponse { bool success = 1; }
 Applied to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next
 `GetNextApplicant` call.
 
+**Health check**
+
+`GET /health` - reports whether this instance is up. It needs no token, and it is not counted
+against the concurrent request limit, so it keeps answering when the service is overloaded.
+It is meant for Service Discovery, not for clients.
+
+```json
+// Response 200
+{
+  "status": "UP",
+  "service": "server-moderation-session-service",
+  "instance": "2742769a5415",
+  "load": { "utilization": 0.04 }
+}
+
+// Response 503 (the database is unreachable)
+{ "status": "DOWN", "service": "server-moderation-session-service", "instance": "2742769a5415" }
+```
+
+- `instance` is the container id (`HOSTNAME`), so replicas of the service can be told apart.
+- `utilization` is the busiest of the HTTP and gRPC counters (0.0 to 1.0): busy slots divided by
+  `MAX_CONCURRENT_REQUESTS`, counted separately for HTTP requests and gRPC calls.
+
+**Service Discovery**
+
+On startup the service registers itself with Service Discovery (`POST /register`) with its
+service name (`server-moderation-session-service`), instance id (`HOSTNAME`), host and port. If `SERVICE_DISCOVERY_URL` is not set, registration is skipped. If Discovery cannot be reached, it retries 5 times, 3 seconds apart, and logs an error. After
+that, the service registers again every `SERVICE_HEARTBEAT_MS` (default 20000), so an instance that was removed from Discovery, or a Discovery that restarted, gets it back. The service keeps running either way.
+
+**Circuit Breaker**
+
+When `SERVICE_DISCOVERY_URL` is set, the Applicant, University Record and Discord DMs clients
+look up the instances of the service in Service Discovery (names `applicant-service`,
+`university-record-service`, `discord-dms-service`, with a `grpc_port`) and call them in turn.
+
+Each instance has its own circuit breaker. After 3 failed calls within 17.5 s (task timeout
+x 3.5), the instance is removed from Discovery (`DELETE /services/{name}/{instance_id}`) and
+the log shows `Circuit breaker tripped ... removing the instance from Discovery`. A removed
+instance comes back by itself when it registers again (heartbeat).
+
+- Only outages count: a timeout, `UNAVAILABLE` or `DEADLINE_EXCEEDED`. Answers like
+  `NOT_FOUND` do not.
+- After a trip the count starts again from zero.
+- The count is kept in memory by each replica, so each replica counts its own failures, and an
+  instance is removed as soon as any one replica sees 3 failures.
+
+If Discovery has no instance of the service, the fixed address (`APPLICANT_GRPC_URL`,
+`UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`) is used. That address has no breaker, and
+nothing is removed. Without `SERVICE_DISCOVERY_URL`, only the fixed address is used.
+
 ## Persistence
 
 The Session Service owns its PostgreSQL database.
@@ -477,7 +610,7 @@ No other microservice directly accesses the Session Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.2.0`
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
@@ -486,7 +619,9 @@ No other microservice directly accesses the Session Service database.
 
 **Ports:** not published on the host; reachable only through the Gateway (localhost:8090)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so a removed instance comes back by itself. The Applicant, University Record and Discord DMs clients look their instances up in Discovery (`applicant-service`, `university-record-service`, `discord-dms-service`), call them in turn, and remove an instance from Discovery after 3 failed calls in 17.5 s. The fixed `*_GRPC_URL` addresses are used when Discovery has no instance of a service.
+
+**DockerHub:** `janetag/server-moderation-session-service:0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 
