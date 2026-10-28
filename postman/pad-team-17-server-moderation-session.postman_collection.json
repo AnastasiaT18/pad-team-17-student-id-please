@@ -1,10 +1,10 @@
 {
   "info": {
-    "_postman_id": "f7ad6192-47ca-4654-985b-96b88644ddb9",
+    "_postman_id": "25a21bc7-a172-467f-a25d-a16857443484",
     "name": "Session Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "50955450",
-    "_collection_link": "https://go.postman.co/collection/50955450-f7ad6192-47ca-4654-985b-96b88644ddb9?source=collection_link"
+    "_collection_link": "https://go.postman.co/collection/50955450-25a21bc7-a172-467f-a25d-a16857443484?source=collection_link"
   },
   "item": [
     {
@@ -44,15 +44,6 @@
                 "value": "application/json"
               }
             ],
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"username\": \"moderator\",\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
@@ -61,6 +52,15 @@
                   "language": "json"
                 }
               }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
             }
           },
           "response": []
@@ -86,15 +86,6 @@
                 "value": "application/json"
               }
             ],
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"username\": \"junior\",\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
@@ -103,6 +94,15 @@
                   "language": "json"
                 }
               }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
             }
           },
           "response": []
@@ -130,6 +130,15 @@
                 "value": "application/json"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
             "url": {
               "raw": "{{base_url}}/players/login",
               "host": [
@@ -139,15 +148,6 @@
                 "players",
                 "login"
               ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
             }
           },
           "response": []
@@ -175,6 +175,15 @@
                 "value": "application/json"
               }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
             "url": {
               "raw": "{{base_url}}/players/login",
               "host": [
@@ -184,15 +193,6 @@
                 "players",
                 "login"
               ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
             }
           },
           "response": []
@@ -242,6 +242,60 @@
           "mode": "raw",
           "raw": ""
         },
+        "url": {
+          "raw": "{{base_url}}/sessions",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Create session - with Idempotency-Key",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));",
+              "pm.test(\"Session is created\", () => pm.expect(pm.response.json().status).to.eql(\"created\"));",
+              "pm.collectionVariables.set(\"idempotent_session_id\", pm.response.json().session_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idempotency_key}}"
+          }
+        ],
         "url": {
           "raw": "{{base_url}}/sessions",
           "host": [
@@ -731,13 +785,11 @@
     },
     {
       "key": "token",
-      "value": "",
-      "type": "secret"
+      "value": ""
     },
     {
       "key": "token_other",
-      "value": "",
-      "type": "secret"
+      "value": ""
     },
     {
       "key": "session_id",
