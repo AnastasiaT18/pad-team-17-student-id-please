@@ -619,7 +619,7 @@ No other microservice directly accesses the Session Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.3.0`
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.3.1`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
@@ -630,7 +630,7 @@ No other microservice directly accesses the Session Service database.
 
 **Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so a removed instance comes back by itself. The Applicant, University Record and Discord DMs clients look their instances up in Discovery (`applicant-service`, `university-record-service`, `discord-dms-service`), call them in turn, and remove an instance from Discovery after 3 failed calls in 17.5 s. The fixed `*_GRPC_URL` addresses are used when Discovery has no instance of a service.
 
-**DockerHub:** `janetag/server-moderation-session-service:0.3.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `janetag/server-moderation-session-service:0.3.1` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 
