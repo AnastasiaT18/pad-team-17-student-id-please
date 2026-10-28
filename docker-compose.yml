@@ -333,11 +333,12 @@ services:
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-3.0.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.4.0}
     container_name: pad17-moderation-service
 
     environment:
       PORT: 3000
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
 
       DB_HOST: moderation-db
       DB_PORT: 5432
@@ -359,6 +360,8 @@ services:
       moderation-db:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      discovery-service:
         condition: service_healthy
 
 
