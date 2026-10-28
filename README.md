@@ -663,8 +663,8 @@ records — never from `deception` itself.
 
 **Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
 is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
-it is not running. The session check is served by a mock until Server Moderation Session Service
-exists - see "Running this service" below.
+it is not running, `503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be
+asked - see "Shift check and circuit breaker (Lab 3)" below.
 
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
@@ -712,7 +712,8 @@ published - the claim is Applicant Service's alone.
 **Errors:** `422 VALIDATION_FAILED` if no field is given, if `year` is outside 1-6, if a text field is
 blank, or if the body tries to change `student_id`, `applicant_id` or `session_id`;
 `400 VALIDATION_FAILED` if the body is not valid JSON; `404 APPLICANT_NOT_FOUND`;
-`409 SESSION_NOT_ACTIVE` if the applicant's shift is no longer running.
+`409 SESSION_NOT_ACTIVE` if the applicant's shift is no longer running;
+`503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be asked.
 
 `DELETE /applicants/{applicant_id}` - removes the applicant
 ```json
@@ -735,7 +736,7 @@ The following two error responses apply to every REST endpoint above:
 Served on port `9090` inside the Compose network (`applicant-service:9090`), not published on the host. The
 contract is `services/applicant-service/src/main/proto/applicant.proto` — `package applicant`, service `ApplicantService`;
 callers generate their stubs from it (NestJS: `package: 'applicant'`). Failures come back as gRPC status codes:
-`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant, `FAILED_PRECONDITION` for `GetNextApplicant` on a shift that is no longer running.
+`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant, `FAILED_PRECONDITION` for `GetNextApplicant` on a shift that is no longer running, `UNAVAILABLE` when Server Moderation Session Service could not be asked whether it is.
 
 `ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
 shift to its next applicant. Every call mints a new applicant for the shift (same as `POST /applicants`),
@@ -770,6 +771,23 @@ message Applicant {
 }
 ```
 
+
+**Outgoing gRPC (needs an answer)**
+
+`SessionService.GetSessionStatus` on Server Moderation Session Service - asked before an applicant
+joins a shift (`POST /applicants`, `PATCH /applicants/{applicant_id}` and `GetNextApplicant`). The contract is a copy of the Session Service's own proto file; like that
+file it declares no package, so the service is `SessionService` on the wire.
+
+```proto
+rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+
+message GetSessionStatusRequest { string session_id = 1; }
+
+// "created" | "active" | "ended"; a session that does not exist is the status NOT_FOUND
+message GetSessionStatusResponse { string status = 1; }
+```
+`active` lets the applicant in, `created` and `ended` are `409 SESSION_NOT_ACTIVE`, and `NOT_FOUND` is
+`404 SESSION_NOT_FOUND`.
 
 **Events published (RabbitMQ)**
 
@@ -825,27 +843,100 @@ initialized the applicant itself, and takes `deception` from that event rather t
 own. That is what keeps the claim, the documents and the records describing the same lie.
 Idempotent on `applicant_id` — an applicant is only initialized once, however many of the events arrive.
 
+**Status endpoint (Lab 3)**
+
+`GET /health` - this instance's state, polled by Service Discovery inside the Compose network. It is
+not routed through the Gateway.
+```json
+// Response 200, or 503 once a check is DOWN
+{
+  "status": "UP",
+  "service": "applicant-service",
+  "instance": "3f2a9c1b7d4e",
+  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "load": { "active": 3, "max": 20, "utilization": 0.15 }
+}
+```
+`load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
+1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
+threshold.
+
+**Service Discovery and replicas (Lab 3)**
+
+Every replica registers on startup:
+```json
+// POST {SERVICE_DISCOVERY_URL}/register
+{
+  "service_name": "applicant-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8081,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+```
+`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
+exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
+instance removes itself (`DELETE /services/applicant-service/{instance_id}`) once it is DOWN and on
+shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
+failed (`?reason=reported DOWN: database`), and Service Discovery passes that on in its alert.
+
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
+round-robin is visible from the client: two requests in a row to `/applicants` show two different ids.
+
+The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
+them, so nothing depends on which replica a request or an event reaches. `applicant-service:9090`
+resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+`grpc_port`).
+
+**Shift check and circuit breaker (Lab 3)**
+
+Applicant Service's one synchronous call is the shift check above - `GetSessionStatus` over gRPC.
+`SESSION_DIRECTORY: grpc` in the Compose file turns it on; everything else the service learns from its
+peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
+
+- **Which instance** - the healthy Session instances Service Discovery lists, in turn (round-robin).
+  While Discovery does not list the Session Service at all, the call goes to
+  `server-moderation-session-service:9090`. When Discovery knows it but has no healthy instance,
+  none is called.
+- **A failure** - an error status, or no answer within `SESSION_TIMEOUT` (2 s); `NOT_FOUND` is an
+  answer, not a failure. The next instance is asked straight away: the check only reads.
+- **Tripping** - 3 failures of one instance within `REQUEST_TIMEOUT` x 3.5 (17.5 s) trip its breaker:
+  the trip is logged at ERROR, and the instance is removed from Service Discovery with
+  `DELETE /services/server-moderation-session-service/{instance_id}?reason=circuit breaker of applicant-service tripped (3 failed calls within 17500 ms)`,
+  so the Gateway and every other caller stop using it and Discovery alerts the developers. This
+  replica then leaves it alone for 17.5 s; after that the first success closes the breaker and the
+  first failure trips it again.
+- **No instance answering** - `503 SESSION_SERVICE_UNAVAILABLE`.
+
+Every replica keeps its own breakers, and every Session instance has its own, so one broken
+Session replica does not cut the service off from the healthy one.
+
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.1.1`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:3.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
-   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+   - `SESSION_DIRECTORY` — `grpc` checks shifts with Server Moderation Session Service, as the team's Compose file does; `mock`, the default, answers in its place for running the service alone (`MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS`)
+   - `SESSION_SERVICE_NAME` (default `server-moderation-session-service`), `SESSION_GRPC_ADDRESS` (default `server-moderation-session-service:9090`), `SESSION_TIMEOUT` (default `2s`) — optional; where the Session Service is found and how long one instance gets to answer
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+   - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
+   - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:2.1.1` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:3.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
-**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
+**Running it without Server Moderation Session Service:** with `SESSION_DIRECTORY=mock` (the service's own default) a mock answers the shift check: every session counts as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running). The team's Compose file uses `grpc`, so the Postman collection opens a real shift first.
 
 **Source code / build details:** private repo `pad-team-17-applicant-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -875,8 +966,8 @@ first of the three applicant-side services to be contacted. It mints the `applic
 
 **Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
 is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
-it is not running. The session check is served by a mock until Server Moderation Session Service
-exists - see "Running this service" below.
+it is not running, `503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be
+asked - see "Shift check and circuit breaker (Lab 3)" below.
 
 `GET /credentials/{applicant_id}` - fetch an applicant's credentials and their validity
 ```json
@@ -964,6 +1055,23 @@ message DocumentStatus { bool valid = 1; string issue = 2; }
 ```
 
 
+**Outgoing gRPC (needs an answer)**
+
+`SessionService.GetSessionStatus` on Server Moderation Session Service - asked before an applicant
+joins a shift (`POST /credentials`). The contract is a copy of the Session Service's own proto file; like that
+file it declares no package, so the service is `SessionService` on the wire.
+
+```proto
+rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+
+message GetSessionStatusRequest { string session_id = 1; }
+
+// "created" | "active" | "ended"; a session that does not exist is the status NOT_FOUND
+message GetSessionStatusResponse { string status = 1; }
+```
+`active` lets the applicant in, `created` and `ended` are `409 SESSION_NOT_ACTIVE`, and `NOT_FOUND` is
+`404 SESSION_NOT_FOUND`.
+
 **Events published (RabbitMQ)**
 
 `credential_initialized` - published when Credential Service is the first to be contacted for a new applicant.
@@ -1017,27 +1125,100 @@ initialized the applicant itself, and forges them according to that event's `dec
 document contradicts the records in a specific, discoverable way instead of at random.
 Idempotent on `applicant_id`.
 
+**Status endpoint (Lab 3)**
+
+`GET /health` - this instance's state, polled by Service Discovery inside the Compose network. It is
+not routed through the Gateway.
+```json
+// Response 200, or 503 once a check is DOWN
+{
+  "status": "UP",
+  "service": "credential-service",
+  "instance": "3f2a9c1b7d4e",
+  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "load": { "active": 3, "max": 20, "utilization": 0.15 }
+}
+```
+`load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
+1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
+threshold.
+
+**Service Discovery and replicas (Lab 3)**
+
+Every replica registers on startup:
+```json
+// POST {SERVICE_DISCOVERY_URL}/register
+{
+  "service_name": "credential-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8082,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+```
+`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
+exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
+instance removes itself (`DELETE /services/credential-service/{instance_id}`) once it is DOWN and on
+shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
+failed (`?reason=reported DOWN: database`), and Service Discovery passes that on in its alert.
+
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
+round-robin is visible from the client: two requests in a row to `/credentials` show two different ids.
+
+The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
+them, so nothing depends on which replica a request or an event reaches. `credential-service:9090`
+resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+`grpc_port`).
+
+**Shift check and circuit breaker (Lab 3)**
+
+Credential Service's one synchronous call is the shift check above - `GetSessionStatus` over gRPC.
+`SESSION_DIRECTORY: grpc` in the Compose file turns it on; everything else the service learns from its
+peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
+
+- **Which instance** - the healthy Session instances Service Discovery lists, in turn (round-robin).
+  While Discovery does not list the Session Service at all, the call goes to
+  `server-moderation-session-service:9090`. When Discovery knows it but has no healthy instance,
+  none is called.
+- **A failure** - an error status, or no answer within `SESSION_TIMEOUT` (2 s); `NOT_FOUND` is an
+  answer, not a failure. The next instance is asked straight away: the check only reads.
+- **Tripping** - 3 failures of one instance within `REQUEST_TIMEOUT` x 3.5 (17.5 s) trip its breaker:
+  the trip is logged at ERROR, and the instance is removed from Service Discovery with
+  `DELETE /services/server-moderation-session-service/{instance_id}?reason=circuit breaker of credential-service tripped (3 failed calls within 17500 ms)`,
+  so the Gateway and every other caller stop using it and Discovery alerts the developers. This
+  replica then leaves it alone for 17.5 s; after that the first success closes the breaker and the
+  first failure trips it again.
+- **No instance answering** - `503 SESSION_SERVICE_UNAVAILABLE`.
+
+Every replica keeps its own breakers, and every Session instance has its own, so one broken
+Session replica does not cut the service off from the healthy one.
+
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.1.1`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:3.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
-   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+   - `SESSION_DIRECTORY` — `grpc` checks shifts with Server Moderation Session Service, as the team's Compose file does; `mock`, the default, answers in its place for running the service alone (`MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS`)
+   - `SESSION_SERVICE_NAME` (default `server-moderation-session-service`), `SESSION_GRPC_ADDRESS` (default `server-moderation-session-service:9090`), `SESSION_TIMEOUT` (default `2s`) — optional; where the Session Service is found and how long one instance gets to answer
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+   - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
+   - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
 
-**DockerHub:** `kutulin/pad-17-credential-service:2.1.1` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:3.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
-**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
+**Running it without Server Moderation Session Service:** with `SESSION_DIRECTORY=mock` (the service's own default) a mock answers the shift check: every session counts as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running). The team's Compose file uses `grpc`, so the Postman collection opens a real shift first.
 
 **Source code / build details:** private repo `pad-team-17-credential-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
