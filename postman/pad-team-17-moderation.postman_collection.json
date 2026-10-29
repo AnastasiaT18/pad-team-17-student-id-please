@@ -1,26 +1,81 @@
 {
   "info": {
-    "_postman_id": "d9e58e16-41e1-4f9c-8ec7-moderation-service",
-    "name": "Moderation Service",
-    "description": "Postman collection for the Student ID, please Moderation Service, tested through the API Gateway (http://localhost:8090).\n\nRun the collection from top to bottom. The Setup folder registers and logs in a temporary player through the Gateway and stores the JWT. All Moderation REST requests then use the Gateway.\n\nExisting validation, duplicate, nonexistent-resource, and deletion error tests are intentionally preserved. The final Gateway authorization checks intentionally expect 401 responses.",
+    "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
+    "name": "Discord DMs — CPR Lab 3 (Gateway + Redis + Discovery)",
+    "description": "CPR-integrated version combining the supplied Discord DMs Lab 3 Discovery tests with Gateway auth/negotiation and real player/session setup.\n\nIn CPR: base_url=http://localhost:8090 (API Gateway), discord_proxy_url=http://localhost:8086 (Traefik). Discord DMs itself is not bound directly to host port 3000. Discovery checks require discovery_url=http://localhost:18000 to be safely forwarded from the Docker network (not published by default).\n\nOrder: Run 0 Setup; 1 Gateway WebSocket Negotiation; 4 Socket.IO Preparation; then use two Postman Socket.IO requests with the socketio_url and emit join_channel/send_message as described by the Lab 3 cross-replica folder. REST Channels/Messages and Service Discovery tests can be run independently where their variables exist.\n\nThe JSON Postman Collection v2.1 export contains HTTP requests and manual instructions; it does NOT contain native Postman Socket.IO request tabs. Redis connection logs alone do not establish successful cross-replica event delivery.\n\nThe legacy 'Provision Session Channels' request is preserved but must not be considered a validated current integration without checking the Session workflow.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8090"
+      "value": "http://localhost:8090",
+      "description": "Direct service HTTP URL in standalone mode; use reachable proxy/Gateway for deployed API routes."
     },
     {
       "key": "session_id",
-      "value": "950e8400-e29b-41d4-a716-446655440000"
+      "value": "",
+      "description": "Set to a REAL session UUID from Session service, not an illustrative UUID."
     },
     {
-      "key": "applicant_id",
-      "value": "550e8400-e29b-41d4-a716-446655440001"
+      "key": "player_id",
+      "value": "",
+      "description": "Set to a REAL player UUID (required by create channel/message examples)."
     },
     {
-      "key": "decision_id",
-      "value": ""
+      "key": "channel_id",
+      "value": "",
+      "description": "Set automatically after successful Create Channel."
+    },
+    {
+      "key": "message_id",
+      "value": "",
+      "description": "Set automatically after successful Create Message."
+    },
+    {
+      "key": "discovery_url",
+      "value": "http://localhost:18000",
+      "type": "string",
+      "description": "Host-local Discovery URL, forwarded from CPR container; not published by default."
+    },
+    {
+      "key": "expected_replicas",
+      "value": "2",
+      "type": "string",
+      "description": "Expected healthy replicas in CPR; set to 1 for a standalone service."
+    },
+    {
+      "key": "baseline_instance_ids",
+      "value": "",
+      "type": "string",
+      "description": "Internal snapshot saved by the baseline request; used to verify recovery."
+    },
+    {
+      "key": "instance_1_id",
+      "value": "",
+      "type": "string",
+      "description": "Set from first registered instance in the Discovery replica check."
+    },
+    {
+      "key": "instance_2_id",
+      "value": "",
+      "type": "string",
+      "description": "Set from second registered instance in the Discovery replica check."
+    },
+    {
+      "key": "instance_1_host",
+      "value": "",
+      "type": "string",
+      "description": "Set from first registered instance in the Discovery replica check."
+    },
+    {
+      "key": "instance_2_host",
+      "value": "",
+      "type": "string",
+      "description": "Set from second registered instance in the Discovery replica check."
+    },
+    {
+      "key": "discord_proxy_url",
+      "value": "http://localhost:8086"
     },
     {
       "key": "run_id",
@@ -41,24 +96,75 @@
     {
       "key": "token",
       "value": ""
+    },
+    {
+      "key": "junior_player_id",
+      "value": ""
+    },
+    {
+      "key": "junior_email",
+      "value": ""
+    },
+    {
+      "key": "junior_username",
+      "value": ""
+    },
+    {
+      "key": "junior_token",
+      "value": ""
+    },
+    {
+      "key": "socketio_url",
+      "value": ""
+    },
+    {
+      "key": "socket_url",
+      "value": ""
+    },
+    {
+      "key": "socket_channel_id",
+      "value": ""
     }
   ],
   "item": [
     {
-      "name": "0. Setup - Player authentication through Gateway",
+      "name": "0. Setup - Two authenticated players and session",
+      "description": "Run in order to generate real IDs and JWTs for tests. Requires CPR Gateway + Player + Session.",
       "item": [
         {
-          "name": "Register test player through Gateway",
+          "name": "Register moderator",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/players",
+            "description": "Create moderator player.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
+          },
+          "response": [],
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "const run = Date.now();",
-                  "pm.collectionVariables.set(\"run_id\", String(run));",
-                  "pm.collectionVariables.set(\"email\", `moderationtester${run}@example.com`);",
-                  "pm.collectionVariables.set(\"username\", `moderationtester${run}`);"
+                  "const stamp=Date.now().toString()+Math.floor(Math.random()*100000).toString();",
+                  "pm.collectionVariables.set('run_id',stamp);",
+                  "pm.collectionVariables.set('username','mod'+stamp);",
+                  "pm.collectionVariables.set('email','mod'+stamp+'@example.com');",
+                  "pm.collectionVariables.set('junior_username','junior'+stamp);",
+                  "pm.collectionVariables.set('junior_email','junior'+stamp+'@example.com');",
+                  "['token','junior_token','session_id','channel_id','message_id','socket_channel_id'].forEach(k=>pm.collectionVariables.unset(k));"
                 ]
               }
             },
@@ -67,17 +173,16 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));",
-                  "const body = pm.response.json();",
-                  "pm.test(\"Response has player_id\", () => pm.expect(body).to.have.property(\"player_id\"));"
+                  "pm.test('201 Created',()=>pm.response.to.have.status(201));",
+                  "if(pm.response.code===201)pm.collectionVariables.set('player_id',pm.response.json().player_id);"
                 ]
               }
             }
-          ],
+          ]
+        },
+        {
+          "name": "Login moderator",
           "request": {
-            "auth": {
-              "type": "noauth"
-            },
             "method": "POST",
             "header": [
               {
@@ -85,48 +190,33 @@
                 "value": "application/json"
               }
             ],
+            "url": "{{base_url}}/players/login",
+            "description": "Save JWT for API calls.",
+            "auth": {
+              "type": "noauth"
+            },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            },
-            "description": "Creates a temporary player through the API Gateway so the collection can obtain a valid JWT."
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
           },
-          "response": []
-        },
-        {
-          "name": "Login test player through Gateway",
+          "response": [],
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-                  "const body = pm.response.json();",
-                  "pm.test(\"Response has token\", () => pm.expect(body).to.have.property(\"token\"));",
-                  "pm.collectionVariables.set(\"token\", body.token);"
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));",
+                  "if(pm.response.code===200)pm.collectionVariables.set('token',pm.response.json().token);"
                 ]
               }
             }
-          ],
+          ]
+        },
+        {
+          "name": "Register junior",
           "request": {
-            "auth": {
-              "type": "noauth"
-            },
             "method": "POST",
             "header": [
               {
@@ -134,497 +224,154 @@
                 "value": "application/json"
               }
             ],
+            "url": "{{base_url}}/players",
+            "description": "Create junior player.",
+            "auth": {
+              "type": "noauth"
+            },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players/login",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players",
-                "login"
-              ]
-            },
-            "description": "Logs in through the API Gateway and stores the JWT in the collection variable token."
+              "raw": "{\n  \"username\": \"{{junior_username}}\",\n  \"email\": \"{{junior_email}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
           },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "1. Create Decision",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"accept\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created',()=>pm.response.to.have.status(201));",
+                  "if(pm.response.code===201)pm.collectionVariables.set('junior_player_id',pm.response.json().player_id);"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "applicants",
-            "{{applicant_id}}",
-            "decision"
           ]
         },
-        "description": "Creates a moderation decision for an applicant."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 201\", function () {",
-              "    pm.response.to.have.status(201);",
-              "});",
-              "",
-              "const response = pm.response.json();",
-              "pm.collectionVariables.set(\"decision_id\", response.id);",
-              "",
-              "pm.test(\"Decision was created\", function () {",
-              "    pm.expect(response.id).to.exist;",
-              "    pm.expect(response.session_id).to.eql(pm.collectionVariables.get(\"session_id\"));",
-              "    pm.expect(response.applicant_id).to.eql(pm.collectionVariables.get(\"applicant_id\"));",
-              "    pm.expect(response.verdict).to.eql(\"accept\");",
-              "    pm.expect(response.correct).to.eql(true);",
-              "    pm.expect(response.penalty).to.eql(0);",
-              "});"
+          "name": "Login junior",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "2. Get All Decisions",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/decisions",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions"
-          ]
-        },
-        "description": "Returns all persisted moderation decisions."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "",
-              "pm.test(\"Response is an array\", function () {",
-              "    pm.expect(pm.response.json()).to.be.an(\"array\");",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "3. Get Decision By ID",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/decisions/{{decision_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "{{decision_id}}"
-          ]
-        },
-        "description": "Returns one moderation decision."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "",
-              "const response = pm.response.json();",
-              "",
-              "pm.test(\"Correct decision returned\", function () {",
-              "    pm.expect(response.id).to.eql(pm.collectionVariables.get(\"decision_id\"));",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "4. Update Decision",
-      "request": {
-        "method": "PATCH",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"ban\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+            "url": "{{base_url}}/players/login",
+            "description": "Save JWT for junior.",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{junior_email}}\",\n  \"password\": \"{{password}}\"\n}"
             }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/decisions/{{decision_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "{{decision_id}}"
-          ]
-        },
-        "description": "Updates the submitted verdict. Correctness and penalty are recalculated by the service."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "",
-              "const response = pm.response.json();",
-              "",
-              "pm.test(\"Verdict was updated and recalculated\", function () {",
-              "    pm.expect(response.id).to.eql(pm.collectionVariables.get(\"decision_id\"));",
-              "    pm.expect(response.verdict).to.eql(\"ban\");",
-              "    pm.expect(response.correct).to.eql(false);",
-              "    pm.expect(response.penalty).to.eql(3);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "5. Invalid Verdict",
-      "request": {
-        "method": "PATCH",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"maybe\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));",
+                  "if(pm.response.code===200)pm.collectionVariables.set('junior_token',pm.response.json().token);"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/decisions/{{decision_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "{{decision_id}}"
           ]
         },
-        "description": "Verifies validation rejects unsupported verdict values."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 400\", function () {",
-              "    pm.response.to.have.status(400);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "6. Protected Field Modification",
-      "request": {
-        "method": "PATCH",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"accept\",\n  \"penalty\": 0\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Create session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/sessions",
+            "description": "Generates real session_id."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created',()=>pm.response.to.have.status(201));",
+                  "if(pm.response.code===201)pm.collectionVariables.set('session_id',pm.response.json().session_id);"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/decisions/{{decision_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "{{decision_id}}"
           ]
         },
-        "description": "Verifies that server-calculated fields such as penalty cannot be modified by the client."
-      },
-      "event": [
         {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 400\", function () {",
-              "    pm.response.to.have.status(400);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "7. Duplicate Decision",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"accept\"\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Junior joins session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/sessions/{{session_id}}/join",
+            "description": "Use junior token to join session.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{junior_token}}",
+                  "type": "string"
+                }
+              ]
             }
-          }
-        },
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "applicants",
-            "{{applicant_id}}",
-            "decision"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));"
+                ]
+              }
+            }
           ]
-        },
-        "description": "Attempts to create a second decision for the same session and applicant."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 409\", function () {",
-              "    pm.response.to.have.status(409);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
         }
       ]
     },
     {
-      "name": "8. Get Nonexistent Decision",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/decisions/11111111-1111-4111-8111-111111111111",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "11111111-1111-4111-8111-111111111111"
-          ]
-        },
-        "description": "Verifies that an unknown decision returns 404."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 404\", function () {",
-              "    pm.response.to.have.status(404);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "9. Delete Decision",
-      "request": {
-        "method": "DELETE",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/decisions/{{decision_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "{{decision_id}}"
-          ]
-        },
-        "description": "Deletes the moderation decision."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 204\", function () {",
-              "    pm.response.to.have.status(204);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "10. Verify Deleted Decision",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/decisions/{{decision_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "decisions",
-            "{{decision_id}}"
-          ]
-        },
-        "description": "Verifies that the deleted decision can no longer be retrieved."
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 404\", function () {",
-              "    pm.response.to.have.status(404);",
-              "});"
-            ],
-            "type": "text/javascript"
-          }
-        }
-      ]
-    },
-    {
-      "name": "Gateway authorization checks",
+      "name": "1. Gateway WebSocket Negotiation",
+      "description": "",
       "item": [
         {
-          "name": "No token - 401 from Gateway",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));",
-                  "pm.test(\"Gateway returns UNAUTHORIZED\", () => pm.expect(pm.response.json().error.code).to.eql(\"UNAUTHORIZED\"));"
-                ]
-              }
-            }
-          ],
+          "name": "No token - 401",
           "request": {
-            "auth": {
-              "type": "noauth"
-            },
             "method": "GET",
             "header": [],
-            "url": {
-              "raw": "{{base_url}}/decisions",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "decisions"
-              ]
-            },
-            "description": "Intentional error: proves the Gateway rejects a protected REST request with no JWT."
+            "url": "{{base_url}}/ws/discord-dms",
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
           },
-          "response": []
-        },
-        {
-          "name": "Invalid token - 401 from Gateway",
+          "response": [],
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));"
+                  "pm.test('401 Unauthorized',()=>pm.response.to.have.status(401));"
                 ]
               }
             }
-          ],
+          ]
+        },
+        {
+          "name": "Invalid token - 401",
           "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/ws/discord-dms",
+            "description": "",
             "auth": {
               "type": "bearer",
               "bearer": [
@@ -634,21 +381,773 @@
                   "type": "string"
                 }
               ]
-            },
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized',()=>pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Negotiate Socket.IO URL",
+          "request": {
             "method": "GET",
             "header": [],
+            "url": "{{base_url}}/ws/discord-dms",
+            "description": "Gateway returns public Discord URL. Traefik is at localhost:8086 in CPR."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));",
+                  "if(pm.response.code===200){",
+                  " const b=pm.response.json();",
+                  " pm.test('Negotiation includes a URL',()=>pm.expect(b.url).to.be.a('string').and.not.empty);",
+                  " pm.collectionVariables.set('socket_url',b.url);",
+                  " pm.collectionVariables.set('socketio_url',b.url.replace(/^http:/,'ws:').replace(/^https:/,'wss:'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Channels",
+      "item": [
+        {
+          "name": "Create Channel",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Channel created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) {",
+                  "  const response = pm.response.json();",
+                  "  if (response.id) pm.collectionVariables.set('channel_id', response.id);",
+                  "  pm.test('Created channel ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"name\": \"general-mod-chat\",\n  \"player_ids\": [\n    \"{{player_id}}\"\n  ]\n}"
+            },
             "url": {
-              "raw": "{{base_url}}/decisions",
+              "raw": "{{base_url}}/channels",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
-                "decisions"
+                "channels"
               ]
             },
-            "description": "Intentional error: proves the Gateway validates bearer tokens."
+            "description": "Requires a real session_id and player_id. A successful response stores channel_id. When testing in CPR, use a reachable service/Gateway HTTP route."
+          }
+        },
+        {
+          "name": "Get All Channels",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Channel",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Session Channels",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "channels"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Provision Session Channels",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Four channels are provisioned', function () {",
+                  "    const channels = pm.response.json();",
+                  "",
+                  "    pm.expect(channels).to.be.an('array');",
+                  "    pm.expect(channels).to.have.length(4);",
+                  "});",
+                  "",
+                  "pm.test('Expected channels are present', function () {",
+                  "    const channels = pm.response.json();",
+                  "    const names = channels.map((channel) => channel.name);",
+                  "",
+                  "    pm.expect(names).to.include.members([",
+                  "        'enrollment-check',",
+                  "        'course-registration',",
+                  "        'schedule-check',",
+                  "        'general-mod-chat'",
+                  "    ]);",
+                  "});",
+                  "",
+                  "pm.test('All provisioned channels belong to the session', function () {",
+                  "    const channels = pm.response.json();",
+                  "    const sessionId = pm.collectionVariables.get('session_id');",
+                  "",
+                  "    channels.forEach((channel) => {",
+                  "        pm.expect(channel.session_id).to.eql(sessionId);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/channels/provision",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "channels",
+                "provision"
+              ]
+            },
+            "description": "Legacy request carried forward from the supplied collection. That collection described this as a Lab 1 mocked Session Service provisioning flow with four fixed channels. Verify the live service implementation before considering the 4-channel assertion an integration test of real Session Service functionality."
+          }
+        },
+        {
+          "name": "Update Channel",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"faculty-check\",\n  \"player_ids\": [\n    \"{{player_id}}\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Channel",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "item": [
+        {
+          "name": "Create Message",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Message created', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) {",
+                  "  const response = pm.response.json();",
+                  "  if (response.id) pm.collectionVariables.set('message_id', response.id);",
+                  "  pm.test('Created message ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sender_id\": \"{{player_id}}\",\n  \"content\": \"Applicant enrollment has been verified.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages"
+              ]
+            },
+            "description": "Requires an existing channel_id and real player_id. A successful response stores message_id."
+          }
+        },
+        {
+          "name": "Get All Messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Message",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages/{{message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages",
+                "{{message_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Message",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Applicant enrollment has been verified and confirmed.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages/{{message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages",
+                "{{message_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Message",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}/messages/{{message_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}",
+                "messages",
+                "{{message_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Socket.IO Preparation",
+      "description": "Run after authentication and negotiation. For real cross-replica Redis testing, create two Postman Socket.IO requests pinned to different Traefik backends.",
+      "item": [
+        {
+          "name": "Create two-player channel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/channels",
+            "description": "Creates a separate test channel for the two Socket.IO clients.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\",\n  \"name\": \"socketio-test\",\n  \"player_ids\": [\n    \"{{player_id}}\",\n    \"{{junior_player_id}}\"\n  ]\n}"
+            }
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created',()=>pm.response.to.have.status(201));",
+                  "if(pm.response.code===201){",
+                  " const b=pm.response.json();",
+                  " pm.test('Both players are members',()=>{",
+                  "   pm.expect(b.player_ids).to.include(pm.collectionVariables.get('player_id'));",
+                  "   pm.expect(b.player_ids).to.include(pm.collectionVariables.get('junior_player_id'));",
+                  " });",
+                  " pm.collectionVariables.set('socket_channel_id',b.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify two-player channel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/channels/{{socket_channel_id}}",
+            "description": "Confirm the channel exists."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));",
+                  "if(pm.response.code===200)pm.test('Correct ID',()=>pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('socket_channel_id')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Lab 3 - Service Discovery & Replicas",
+      "description": "Run after configuring discovery_url and deploying the service. These requests are read-only.",
+      "item": [
+        {
+          "name": "1. Service HTTP Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Health HTTP status is 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('Service reports UP', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.be.an('object');",
+                  "    pm.expect(body.status).to.eql('UP');",
+                  "    pm.expect(body.service).to.eql('discord-dms-service');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discord_proxy_url}}/health",
+              "host": [
+                "{{discord_proxy_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Discord DMs health through Traefik, which load-balances two replicas and sets sticky-session cookies.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "2. Discovery HTTP Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery health HTTP status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/health",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description).",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "3. Verify Registered Replicas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  const instances = pm.response.json();",
+                  "  const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "  pm.test('Response is an instance array', () => pm.expect(instances).to.be.an('array'));",
+                  "  if (Array.isArray(instances)) {",
+                  "    pm.test('Expected instance count', () => pm.expect(instances.length).to.eql(expected));",
+                  "    pm.test('Instances have unique IDs and addresses', () => {",
+                  "      pm.expect(new Set(instances.map(x => x.instance_id)).size).to.eql(instances.length);",
+                  "      pm.expect(new Set(instances.map(x => x.host)).size).to.eql(instances.length);",
+                  "    });",
+                  "    pm.test('Every instance belongs to the service and is healthy', () => {",
+                  "      instances.forEach(x => { pm.expect(x.service_name).to.eql('discord-dms-service'); pm.expect(x.healthy).to.eql(true); pm.expect(x.health.status).to.eql('UP'); });",
+                  "    });",
+                  "    pm.test('Instances advertise a gRPC port', () => instances.forEach(x => pm.expect(x.grpc_port).to.be.a('number')));",
+                  "    if (instances[0]) { pm.collectionVariables.set('instance_1_id', instances[0].instance_id); pm.collectionVariables.set('instance_1_host', instances[0].host); }",
+                  "    if (instances[1]) { pm.collectionVariables.set('instance_2_id', instances[1].instance_id); pm.collectionVariables.set('instance_2_host', instances[1].host); }",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/discord-dms-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "discord-dms-service"
+              ]
+            },
+            "description": "Checks discord-dms-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "4. Capture IDs Before Discovery Restart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  const instances = pm.response.json();",
+                  "  const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "  pm.test('Baseline has expected number of healthy replicas', () => {",
+                  "    pm.expect(instances).to.be.an('array').with.lengthOf(expected);",
+                  "    instances.forEach(x => pm.expect(x.healthy).to.eql(true));",
+                  "  });",
+                  "  if (Array.isArray(instances) && instances.length === expected && instances.every(x => x.healthy)) {",
+                  "    pm.collectionVariables.set('baseline_instance_ids', JSON.stringify(instances.map(x => x.instance_id).sort()));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/discord-dms-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "discord-dms-service"
+              ]
+            },
+            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "5. Verify IDs After Discovery Restart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "const baselineRaw = pm.collectionVariables.get('baseline_instance_ids');",
+                  "pm.test('Baseline was captured first', () => pm.expect(baselineRaw, 'Run request 4 before restarting Discovery').to.be.a('string').and.not.empty);",
+                  "if (pm.response.code === 200 && baselineRaw) {",
+                  "  const instances = pm.response.json();",
+                  "  const originalIds = JSON.parse(baselineRaw);",
+                  "  const currentIds = instances.map(x => x.instance_id).sort();",
+                  "  pm.test('Original instances re-register after Discovery restart', () => pm.expect(currentIds).to.deep.eql(originalIds));",
+                  "  pm.test('Recovered instances are healthy', () => instances.forEach(x => { pm.expect(x.healthy).to.eql(true); pm.expect(x.health.status).to.eql('UP'); }));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/discord-dms-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "discord-dms-service"
+              ]
+            },
+            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Lab 3 - Traefik, Redis and Socket.IO validation",
+      "description": "Manual cross-replica Socket.IO test (HTTP collection export cannot store Socket.IO request tabs):\n1. Run Setup, Gateway WebSocket Negotiation, and Socket.IO Preparation.\n2. Run `curl -i http://localhost:8086/health` without cookies until you see two instance IDs. Save each response's `Set-Cookie: discord_route=...` value.\n3. Create two Socket.IO requests in Postman to {{socketio_url}} (not HTTP requests). In their handshake headers use different `Cookie: discord_route=<cookie>` values, targeting different replicas.\n4. Connect both. Moderator emits `join_channel` with {\"channel_id\":\"{{socket_channel_id}}\",\"player_id\":\"{{player_id}}\"}.\n5. Junior emits `join_channel` with {\"channel_id\":\"{{socket_channel_id}}\",\"player_id\":\"{{junior_player_id}}\"}.\n6. On Junior, listen to the server event `message`. On Moderator, emit `send_message` with {\"channel_id\":\"{{socket_channel_id}}\",\"sender_id\":\"{{player_id}}\",\"content\":\"Lab 3 cross-replica test\"}.\n7. Verify the junior receives the message while connected to the other replica. This is the real Redis cross-instance test.\n8. Redis adapter startup logs or successful HTTP requests alone do not prove event delivery.",
+      "item": [
+        {
+          "name": "HTTP /health through Traefik (first)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{discord_proxy_url}}/health",
+            "description": "Tests proxy routing; one response cannot demonstrate round-robin.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));",
+                  "if(pm.response.code===200){",
+                  " const b=pm.response.json();",
+                  " pm.test('Discord backend UP',()=>{pm.expect(b.status).to.eql('UP');pm.expect(b.service).to.eql('discord-dms-service');pm.expect(b.instance).to.be.a('string').and.not.empty;});",
+                  " pm.collectionVariables.set('observed_discord_instance',b.instance);",
+                  " console.log('Discord instance:',b.instance);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "HTTP /health through Traefik (next)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{discord_proxy_url}}/health",
+            "description": "Do not assert instance IDs differ when sticky cookies are in effect.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK',()=>pm.response.to.have.status(200));",
+                  "if(pm.response.code===200){",
+                  " const b=pm.response.json();",
+                  " pm.test('Discord backend UP',()=>pm.expect(b.service).to.eql('discord-dms-service'));",
+                  " console.log('First:',pm.collectionVariables.get('observed_discord_instance'));",
+                  " console.log('Next:',b.instance);",
+                  " console.log('Postman cookies may keep both requests pinned to the same replica; this is expected.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Gateway authorization checks",
+      "item": [
+        {
+          "name": "No token - 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/channels",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Gateway returns 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid token - 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/channels",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "invalid.token",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Gateway returns 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
         }
       ]
     }
