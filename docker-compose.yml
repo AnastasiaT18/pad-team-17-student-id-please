@@ -180,6 +180,13 @@ services:
   discovery-service:
     image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
     container_name: pad17-discovery-service
+    environment:
+      # Health alerts also go to the developers' Telegram group, posted by the team's bot. The bot's
+      # token is a secret: .env only.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # The share of an instance's busy request workers from which its load is critical - an alert.
+      CRITICAL_LOAD_THRESHOLD: ${CRITICAL_LOAD_THRESHOLD:-0.8}
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
