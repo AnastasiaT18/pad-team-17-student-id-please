@@ -9,8 +9,98 @@ The system is split into 8 microservices, each owning a distinct piece of the ga
 ## Team 17
 - Anastasia Tiganescu, FAF-231 — Server Rules + University Record Services
 - Catalin Darzu, FAF-231  — Applicant and Credential Services
-- Daniela Cojocari, FAF-231  — Moderation + Discord DMS Services
+- Daniela Cojocari, FAF-231  — Moderation + Discord DMs Services
 - Janeta Grigoras, FAF-231  — Player + Server Moderation Session Services
+
+## Running the integrated stack (Lab 3)
+
+The **CPR repository** is the integration point. `docker-compose.yml` starts the eight application
+services (two replicas each), API Gateway, Service Discovery, PostgreSQL databases, RabbitMQ,
+Redis, and the Discord DMs reverse proxy. Services run from their published Docker Hub images;
+Git submodules pin the source-code revisions for review and traceability, rather than building
+those services locally.
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with the shared database passwords, RabbitMQ credentials, JWT secret, and (optionally)
+the Telegram bot settings. **Never commit `.env` or real tokens.** Then run:
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+| Entry point | Address | Purpose |
+|---|---|---|
+| API Gateway | `http://localhost:8090` | Authenticated REST API for clients and Postman |
+| Discord DMs reverse proxy | `http://localhost:8086` | Socket.IO connections and Discord health checks |
+| RabbitMQ management | `http://localhost:15672` | Broker administration (credentials from `.env`) |
+| Service Discovery | `http://discovery-service:8000` inside Compose | Internal registration, lookup, and health monitoring; not exposed on the host |
+
+Moderation and Discord DMs are **not** given fixed `container_name` or published host ports:
+that would prevent normal replication. Traefik owns `8086` and forwards Discord requests to two
+replicas. The Gateway returns this public URL when a client negotiates `GET /ws/discord-dms`.
+
+The Compose defaults for Pair 4 are:
+
+```text
+MODERATION_VERSION=v0.4.0
+DISCORD_DMS_VERSION=v0.4.0
+DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.1.0
+```
+
+The service-image tags are republished in place when new code reaches their respective `main`
+branches; the Git release tags are not moved. **Pull the images again** when a service is released.
+Updating a CPR submodule pointer only changes the recorded source-code revision; it does not
+rebuild, pull, or deploy the Docker image.
+
+### Lab 3 replication and fault tolerance
+
+- **Service Discovery:** each instance registers at startup and renews registration periodically;
+  the health monitor verifies instances and exposes only their `healthy` state to callers.
+  Registration heartbeats restore instances after a Discovery restart or deregistration.
+- **Moderation:** two replicas share PostgreSQL and RabbitMQ. The updated service supports
+  instance-aware gRPC routing and per-instance circuit breakers for Applicant, Credential,
+  University Record, and Server Rules. `GRPC_DISCOVERY_ENABLED` is **off by default**; enable it
+  only after all four dependencies advertise healthy gRPC instances in Discovery. Otherwise the
+  configured static `*_GRPC_URL` endpoints remain in use.
+- **Discord DMs:** two replicas share PostgreSQL and `REDIS_URL=redis://redis:6379`. The Socket.IO
+  Redis adapter distributes events between replicas. Traefik balances incoming connections and
+  issues a sticky `discord_route` cookie, needed for Socket.IO HTTP long-polling sessions.
+- **Alerts:** Discovery logs health-state and critical-load events and, when configured, sends them
+  to the team's Telegram group.
+
+### Verify the deployed stack
+
+```bash
+docker compose ps discord-dms-service moderation-service redis discord-proxy
+docker compose exec -T redis redis-cli ping
+curl -i http://localhost:8086/health
+```
+
+A healthy Redis responds `PONG`. Discord's `/health` returns HTTP `200` and an `instance` field;
+repeated requests **without a saved cookie** can alternate between the two replicas. To check
+registered Discord instances from inside the Compose network:
+
+```bash
+docker compose exec -T discovery-service python -c 'import urllib.request,json; d=json.load(urllib.request.urlopen("http://127.0.0.1:8000/services/discord-dms-service")); print([(x["instance_id"],x["healthy"]) for x in d])'
+```
+
+**Verified locally (29 October 2026):** two healthy Discord instances in Discovery, Redis adapters
+connected in both replicas, HTTP `200` through Traefik, load balancing across both instances,
+and six requests with the same `discord_route` cookie reaching one instance. **Cross-replica
+Socket.IO message delivery still needs an end-to-end test** and should not be inferred solely from
+Redis connectivity or HTTP load balancing.
+
+The two REST collections are
+[`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json)
+and [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
+Their existing API checks remain useful; dedicated Lab 3 failover and cross-replica tests are
+tracked separately and are not yet presented as passing.
 
 ---
 
@@ -74,7 +164,7 @@ the current session.
 
 Arrows point from the service that initiates a call to the service it calls.
 
-What Lab 3 added is in orange. Every service runs as two replicas, drawn as two stacked boxes:
+What Lab 3 added is in orange. Each of the eight application services is configured to run as two replicas, drawn as two stacked boxes:
 each instance registers with Service Discovery, which checks its health and load every 5 seconds
 and alerts the developers' Telegram group when an instance goes down, recovers, reaches a critical
 load or is removed. Callers that look a service up in Service Discovery send each request to its
@@ -126,16 +216,17 @@ Trade-off: heavier services and slower startup — acceptable, since nothing her
 | Server Rules | 3 | Java 21 · Spring Boot | PostgreSQL (rule sets only) |
 | University Record | 3 | Java 21 · Spring Boot, JPA | PostgreSQL |
 | Moderation | 4 | TypeScript · NestJS | PostgreSQL |
-| Discord DMs | 4 | TypeScript · NestJS, Socket.IO | PostgreSQL |
+| Discord DMs | 4 | TypeScript · NestJS, Socket.IO, Redis adapter | PostgreSQL |
 
 ### Communication
 
 | Direction | Protocol | Why |
 |---|---|---|
 | Client → system | REST + JSON via API gateway | Discrete actions (login, join shift, query record, submit verdict). One place to check the JWT. |
-| Client → Discord DMs | WebSocket (Socket.IO) | Chat must be pushed, not polled. |
+| Client → Discord DMs | WebSocket (Socket.IO) via Traefik | Persistent chat connections use port `8086`; sticky sessions and Redis support two replicas. |
 | Service → service, needs an answer | gRPC | Moderation makes 4 calls (Applicant, Credential, Record, Rules) before answering. The `.proto` is one contract both languages generate from, so Java and TS can't drift. |
 | Service → service, fire and forget | RabbitMQ events | `applicant_initialized`, `decision_made`, `shift_ended`. Publisher doesn't wait; a consumer being down doesn't fail the shift. |
+| Discord replica ↔ Discord replica | Redis Pub/Sub (Socket.IO adapter) | Delivers room events between connected clients on different replicas. |
 
 ### Data management
 
@@ -1567,125 +1658,53 @@ The consumer listens on queue `player-service.shift_ended`, bound to the shared 
 
 #### Requirements
 
-To run the service locally, the following software is required:
+The service is built with TypeScript, NestJS, TypeORM, PostgreSQL, gRPC, and RabbitMQ. For
+standalone development use Node.js 24+, npm and PostgreSQL 16+; the shared CPR deployment uses
+published Docker images instead of building from each private source repository.
 
-- Node.js 24+
-- npm
-- PostgreSQL 16+
-
-Alternatively, Docker can be used to run both the service and its PostgreSQL database:
-
-- Docker
-- Docker Compose
-
-The service uses the following main technologies:
-
-- TypeScript
-- NestJS
-- TypeORM
-- PostgreSQL
-- gRPC for future synchronous service-to-service communication
-- RabbitMQ for future asynchronous event publishing
-
-Create a `.env` file based on `.env.example`:
-
-```env
-PORT=3000
-
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=moderation
-DB_PASSWORD=change_me
-DB_DATABASE=moderation
-```
-
-Use the actual values defined in `.env.example` if they differ from the example above.
-
-For local development, install the dependencies and start the service:
-
-```bash
-npm install
-npm run start:dev
-```
-
-When running locally, the Moderation Service is available at:
-
-```text
-http://localhost:3000
-```
-
+For local source development, see `services/moderation-service/README.md`. In the CPR deployment,
+`DB_HOST=moderation-db`, `DB_NAME=moderation`, `SERVICE_DISCOVERY_URL=http://discovery-service:8000`,
+and `SERVICE_HEARTBEAT_SECONDS=15` are supplied by `docker-compose.yml`.
 
 #### Running with Docker
 
-The service and its PostgreSQL database can be started using Docker Compose:
-
 ```bash
-docker compose up -d
+docker compose pull moderation-service
+docker compose up -d moderation-service
+docker compose ps moderation-service
 ```
 
-The Moderation Service runs on port `3000` inside its container and is exposed on the host at:
-
-```text
-http://localhost:8085
-```
-
-The deployment also starts the PostgreSQL database used by the Moderation Service.
-
-The published Docker image is:
-
-```text
-dannacojocari/moderation-service:0.2.0
-```
-
-The image supports:
-
-```text
-linux/amd64
-linux/arm64
-```
-
-PostgreSQL data is stored in a persistent Docker volume.
-
-To check the containers:
-
-```bash
-docker compose ps
-```
-
-To stop the service:
-
-```bash
-docker compose down
-```
+- **Image:** `dannacojocari/moderation-service:v0.4.0` (also published as `latest`).
+- **Replicas:** 2, running on internal port `3000`.
+- **Access:** authenticated REST requests go through the Gateway at `http://localhost:8090`.
+  The CPR Compose deployment does **not** publish Moderation directly on host port `8085`.
+- **Persistence:** both instances use `moderation-db` and its named PostgreSQL volume.
+- **Discovery:** both instances register and renew their registrations every 15 seconds.
 
 #### Communication
 
-The Moderation Service uses different communication mechanisms depending on the operation.
+**REST:** clients submit and manage decisions via the Gateway, which validates bearer tokens and
+passes the trusted player identity to downstream services.
 
-**REST**
+**gRPC:** Moderation gathers applicant details from Applicant, Credential and University Record,
+then asks Server Rules to evaluate the result. The deployed service supports real gRPC clients.
+Its optional discovery-backed router (`GRPC_DISCOVERY_ENABLED=true`) selects healthy instances,
+tracks failures per instance, and applies circuit breakers; with the flag left unset in CPR,
+the configured static addresses remain in use:
 
-REST is used by clients to submit and manage moderation decisions.
+```text
+APPLICANT_GRPC_URL=applicant-service:9090
+CREDENTIAL_GRPC_URL=credential-service:9090
+UNIVERSITY_RECORD_GRPC_URL=university-record-service:9090
+SERVER_RULES_GRPC_URL=server-rules-service:9090
+```
 
-**gRPC**
+Only enable discovery-backed gRPC after all four destinations have healthy entries with
+`grpc_port` in `GET /services/{service_name}`. A gRPC business error is not the same as an
+infrastructure outage and should not trip a circuit breaker.
 
-gRPC is the planned synchronous service-to-service communication mechanism.
-
-The Moderation Service requires information from:
-
-- Applicant Service
-- Credential Service
-- University Record Service
-- Server Rules Service
-
-For Lab 1, these dependencies are represented by mock implementations behind service interfaces. The mocks can later be replaced by gRPC clients without changing the moderation decision logic.
-
-**RabbitMQ**
-
-RabbitMQ is the planned asynchronous communication mechanism for publishing moderation results.
-
-After a new decision is successfully persisted, the Moderation Service publishes a `decision_made` event.
-
-For Lab 1, the RabbitMQ publisher is represented by a mock implementation. The same publisher abstraction can later be backed by RabbitMQ.
+**RabbitMQ:** Moderation publishes `decision_made` after persisting the decision, allowing the
+Session Service to advance the shift without a synchronous callback.
 
 #### Decisions REST API
 
@@ -1889,7 +1908,7 @@ accept | reject | flag | ban
 
 The Server Rules Service determines the expected verdict and violated rules. It does not fetch the applicant data itself.
 
-For Lab 1, all four gRPC dependencies are represented by mock implementations.
+The Lab 3 deployment uses real gRPC integrations. The service also retains test doubles for isolated unit tests.
 
 #### RabbitMQ Events
 
@@ -1909,7 +1928,7 @@ A `decision_made` event is published after a new moderation decision has been su
 
 The event allows other services, particularly the Server Moderation Session Service, to react to the result of a moderation decision without creating a synchronous dependency on the Moderation Service.
 
-For Lab 1, event publishing is represented by a mock publisher. RabbitMQ integration will replace this mock during service integration.
+In the integrated deployment the event is published through RabbitMQ; isolated tests may use mock publishers.
 
 #### Persistence
 
@@ -1928,45 +1947,23 @@ No other microservice directly accesses the Moderation Service database.
 
 #### Postman Collection
 
-The REST API can be tested using:
+The CPR collection is
+[`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json).
+It starts with Gateway-based player registration/login, then exercises decision creation, listing,
+lookup, modification, validation errors, duplicates, deletion, and missing-resource handling.
+It captures `decision_id` from the create response and uses `base_url=http://localhost:8090`.
 
-```text
-postman/pad-team-17-pair4-moderation.postman_collection.json
-```
+#### Lab 3 integration notes
 
-The collection uses variables for:
-
-- `base_url`
-- `session_id`
-- `applicant_id`
-- `decision_id`
-
-The `decision_id` variable is automatically populated after a decision is successfully created.
-
-The collection covers:
-
-- Creating a moderation decision
-- Retrieving all decisions
-- Retrieving a decision by ID
-- Updating a decision and verifying recalculation
-- Rejecting an invalid verdict
-- Rejecting modifications to protected fields
-- Rejecting duplicate decisions
-- Retrieving a nonexistent decision
-- Deleting a decision
-- Verifying that a deleted decision returns `404`
-
-Run the requests in their numbered order for the complete workflow.
-
-#### Current Lab 1 Limitations
-
-The external service dependencies are currently represented by mocks rather than real gRPC clients.
-
-The `decision_made` publisher is currently a mock rather than a RabbitMQ publisher.
-
-Moderator identity is also mocked for Lab 1. Once authentication is integrated, the moderator identity should be obtained from the authenticated JWT rather than from a development/mock identity.
-
-The service interfaces and publisher abstraction are intentionally separated from the decision logic so these mocks can later be replaced by the real infrastructure integrations.
+- The Docker image is `v0.4.0` and runs as **two replicas** with periodic Service Discovery
+  registration and automatic recovery after Discovery restarts.
+- The discovery-backed gRPC router and per-instance circuit breakers are implemented and tested
+  in the service, but are **opt-in** (`GRPC_DISCOVERY_ENABLED=true`) and are **not enabled in the
+  supplied CPR Compose configuration**.
+- If you enable this routing mode, first verify registration of Applicant, Credential,
+  University Record and Server Rules, including each instance's `grpc_port`.
+- Static gRPC URLs still exist for the default configuration and as the service's fallback mode.
+- The integration tests for dynamic routing/failover are distinct from the Postman REST collection.
 
 ---
 
@@ -1980,91 +1977,36 @@ The service transports messages between players but does not determine whether t
 
 #### Requirements
 
-To run the service locally, the following software is required:
-
-- Node.js 24+
-- npm
-- PostgreSQL 16+
-
-Alternatively, Docker can be used to run both the service and its PostgreSQL database:
-
-- Docker
-- Docker Compose
-
-The service uses the following main technologies:
-
-- TypeScript
-- NestJS
-- TypeORM
-- PostgreSQL
-- Socket.IO
-
-Create a `.env` file based on `.env.example`:
-
-```env
-PORT=3000
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=discord_dms
-DB_PASSWORD=change_me
-DB_DATABASE=discord_dms
-```
-
-For local development, install the dependencies and start the service:
-
-```bash
-npm install
-npm run start:dev
-```
-
-When running locally, the Discord DMs Service is available at:
-
-```text
-http://localhost:3000
-```
+The service uses TypeScript, NestJS, TypeORM, PostgreSQL and Socket.IO; in the replicated CPR
+deployment it also uses a Redis Socket.IO adapter. Local development requires Node.js 24+, npm
+and PostgreSQL 16+. For source-level setup, see `services/discord-dms-service/README.md`.
 
 #### Running with Docker
 
-The recommended way to run the complete service is with Docker Compose:
-
 ```bash
-docker compose up -d
+docker compose pull discord-dms-service
+docker compose up -d redis discord-dms-service discord-proxy
+docker compose ps discord-dms-service redis discord-proxy
 ```
 
-The Discord DMs Service runs on port `3000` inside its container and is exposed on the host at:
+- **Image:** `dannacojocari/discord-dms-service:v0.4.0` (also published as `latest`).
+- **Replicas:** 2, each listening on internal HTTP port `3000` and gRPC port `9090`.
+- **PostgreSQL:** both replicas share `discord-dms-db` and its persistent volume.
+- **Redis:** `REDIS_URL=redis://redis:6379`; both replicas connect to the adapter on startup.
+- **Discovery:** `SERVICE_DISCOVERY_URL=http://discovery-service:8000`, heartbeat every 15 seconds.
+- **Public access:** Traefik (`discord-proxy`, `traefik:v3.6.16`) publishes host port `8086` and
+  balances incoming requests. The Discord service itself has no fixed `container_name` or host
+  `ports` declaration, allowing Compose to start two instances.
 
-```text
-http://localhost:8086
-```
+Gateway REST endpoints remain on `http://localhost:8090`. The Gateway's
+`DISCORD_DMS_PUBLIC_URL=http://localhost:8086` tells clients where to establish their persistent
+Socket.IO connections after successful authorization/negotiation.
 
-The deployment also starts the PostgreSQL database used by the Discord DMs Service.
-
-The published Docker image is:
-
-```text
-dannacojocari/discord-dms-service:0.3.0
-```
-
-The image supports:
-
-```text
-linux/amd64
-linux/arm64
-```
-
-PostgreSQL data is stored in a persistent Docker volume.
-
-To check the containers:
-
-```bash
-docker compose ps
-```
-
-To stop the service:
-
-```bash
-docker compose down
-```
+Traefik routes to the replicas using Docker labels. It sets the `discord_route` sticky cookie so
+requests belonging to one Socket.IO HTTP-polling session reach the same replica. Redis Pub/Sub
+then propagates room messages across replicas; the shared PostgreSQL database stores channels
+and message history. Sticky routing and Redis serve **different** purposes and both are needed
+for this deployment.
 
 #### Communication
 
@@ -2072,7 +2014,7 @@ The Discord DMs Service uses different communication mechanisms depending on the
 
 **REST**
 
-REST is used for channel and message management and for triggering session channel provisioning during Lab 1.
+REST is used for channel and message management and for provisioning session channels via the Gateway.
 
 **WebSocket / Socket.IO**
 
@@ -2092,9 +2034,7 @@ Supported server events:
 
 The Discord DMs Service depends on session and player-assignment information to determine which players should have access to each communication channel.
 
-The integration is represented by a `SessionClient` abstraction. For Lab 1, the real Session Service gRPC integration is not yet available, so the service uses `MockSessionClient`.
-
-The mocked Session Service returns:
+The Session Service can call Discord DMs over the deployed gRPC interface (`DiscordDmsService.ProvisionChannels`, port `9090`). The application also has a `SessionClient` abstraction used by the REST provisioning workflow and isolated tests. Provisioning receives:
 
 - `session_id`
 - players belonging to the session
@@ -2110,7 +2050,7 @@ schedule
 messages
 ```
 
-The Lab 1 implementation maps these scopes to Discord channels:
+These scopes map to Discord channels:
 
 ```text
 enrollment -> enrollment-check
@@ -2121,13 +2061,13 @@ messages   -> general-mod-chat
 
 Channel membership is generated from the scopes assigned to each player.
 
-The mock is isolated behind the `SessionClient` interface so that it can later be replaced by a real gRPC implementation without changing the channel provisioning logic.
+The channel provisioning logic is independent of whether session information originates in a test client or the real Session Service. The deployed gRPC server is reachable internally, not through the public Traefik HTTP port.
 
 **RabbitMQ**
 
 The current Discord DMs Service does not publish or consume RabbitMQ events.
 
-Real-time player messages are transported directly through Socket.IO and persisted in PostgreSQL. The service does not determine whether message contents are correct and currently has no asynchronous domain events that require RabbitMQ.
+Real-time player messages are transported through Socket.IO, distributed between replicas via Redis, and persisted in PostgreSQL. Redis Pub/Sub is transport coordination rather than a domain-event replacement for RabbitMQ. Discord DMs does not currently publish or consume RabbitMQ domain events.
 
 #### Channels REST API
 
@@ -2300,32 +2240,33 @@ No other microservice directly accesses the Discord DMs database.
 
 #### Postman Collection
 
-The REST API can be tested using:
+The CPR collection is
+[`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
+It includes Gateway-based setup for a Moderator and Junior Moderator, REST channel/message
+operations, Gateway WebSocket negotiation (`GET /ws/discord-dms`), and preparation of a
+shared channel for Socket.IO testing.
 
-```text
-postman/pad-team-17-pair4-discord-dms.postman_collection.json
-```
+Postman's legacy HTTP collection format does not encode live Socket.IO sessions. Create two
+Socket.IO requests in Postman using the `socketio_url` saved during negotiation; use
+`socket_channel_id`, `player_id`, and `junior_player_id` from the setup requests. Each socket
+emits `join_channel`; one emits `send_message` and the other listens for `message`.
 
-The collection contains requests for:
+For a **cross-replica** test, connect the two sockets using distinct Traefik sticky cookies
+obtained from `/health` requests that identify different replica instances. Verify that the
+second client receives the first client's message. This end-to-end test is **still pending**;
+HTTP balancing, sticky routing and Redis connections have already been checked separately.
 
-- Channel CRUD
-- Session channel lookup
-- Session channel provisioning
-- Message CRUD
+#### Lab 3 integration notes
 
-The `Provision Session Channels` request verifies that the mocked Session Service information produces the expected channels.
-
-#### Current Lab 1 Limitations
-
-Authentication between the client and Discord DMs is not yet integrated. For Lab 1, player identity is supplied in the WebSocket payload.
-
-JWT authentication should later provide the authenticated player identity instead of trusting `player_id` or `sender_id` supplied by the client.
-
-The Session Service integration currently uses `MockSessionClient`. The mock provides session players, roles, and scopes so that channel provisioning can be implemented and tested independently while the real Session Service integration is unavailable.
-
-The mock will later be replaced by a gRPC client implementing the same `SessionClient` abstraction.
-
-The current scope-to-channel mapping is part of the Lab 1 implementation and can be revised when the final inter-service contract and channel configuration rules are integrated.
+- `docker compose ps discord-dms-service` should show **two** application instances.
+- `GET /services/discord-dms-service` in Discovery should return two distinct, healthy instances.
+- `docker compose exec -T redis redis-cli ping` should return `PONG`.
+- Both application replicas should log `Redis adapter connected` and periodic registrations.
+- `curl -i http://localhost:8086/health` should return `200`, an `instance` field, and the
+  `discord_route` sticky-session cookie. Reusing the same cookie should consistently hit one
+  instance; fresh requests can be balanced across both.
+- Traefik `v3.4` could not discover containers with the Docker Engine 29.0.1 used during local
+  verification. The working deployment uses **Traefik `v3.6.16`** instead.
 
 ### Service Discovery
 
@@ -2394,6 +2335,33 @@ its state and its load:
 listening on `8000` inside the Compose network only. `GET /health` reports its own state: whether
 its health monitor runs, and how many services and instances it holds. A release is a `v*.*.*` Git
 tag on its `main`; the image carries the same version without the `v`.
+
+## Source submodules and Docker images
+
+The service directories under `services/` are **Git submodules**. CPR records the exact commit
+for each dependency; it does not vendor its contents. To inspect a service's source, run:
+
+```bash
+git submodule update --init services/moderation-service services/discord-dms-service services/discovery-service
+```
+
+To change the pinned versions, use a CPR feature branch, fetch each submodule's `main`, check
+out the intended commit, then stage and commit the three changed gitlinks in CPR. Review them
+with `git diff --submodule=log`. This is independent of Docker publishing.
+
+The Pair 4 source repositories are:
+
+- [`DannaCojocari/moderation-service`](https://github.com/DannaCojocari/moderation-service)
+- [`DannaCojocari/discord-dms-service`](https://github.com/DannaCojocari/discord-dms-service)
+- [`DannaCojocari/pad-team-17-discovery-service`](https://github.com/DannaCojocari/pad-team-17-discovery-service)
+
+A new `main` commit in a source repository does not automatically change the CPR submodule pointer.
+Similarly, updating the gitlink does not automatically pull its published Docker image. To get
+republished Pair 4 images locally, use `docker compose pull moderation-service discord-dms-service`
+and recreate the services. Discovery uses the separate `DISCOVERY_IMAGE` variable. Keep the
+revisions and image contents aligned when preparing a team release.
+
+---
 
 ## GitHub Workflow
 
