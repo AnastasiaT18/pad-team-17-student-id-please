@@ -1,396 +1,1318 @@
 {
   "info": {
-    "_postman_id": "bb1133bb-8031-470c-8ae2-23210cc72f95",
     "name": "University Record Service",
-    "description": "Self-contained: a collection pre-request script registers/logs in two test players through the Gateway and fills token_player1 / token_stranger (no token copying from the Player collection).\n\nONE-TIME SETUP: AssignScopes is gRPC-only. Send any request once, open Postman Console (View > Show Postman Console), copy the printed grpcurl command and run it in a terminal. The assignment lives in the DB, so it survives re-runs until you `docker compose down -v`.\n\nThen run the collection in order.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "_exporter_id": "50442487",
-    "_collection_link": "https://go.postman.co/collection/50442487-bb1133bb-8031-470c-8ae2-23210cc72f95?source=collection_link"
+    "description": "University Record Service, tested through the Gateway ([http://localhost:8090](http://localhost:8090)). Its own ports are not published, so the Gateway is the only way in.\n\nSELF-CONTAINED: folder 0 registers three throwaway players (moderator, junior, stranger), logs them in, opens a real session, lets the junior join and starts it. Starting the session makes Session Service call AssignScopes on University Record over gRPC, so no grpcurl or manual step is needed. Run the collection top to bottom with the Collection Runner (each run registers fresh players).\n\nWHAT IT PROVES\n\n- Folder 1: POST /records checks the session with Session Service (gRPC): 201 for a running session, 404 unknown, 409 not started, 422/400/401 for bad input.\n    \n- Folder 2: GET /sessions/{id}/records/{applicantId} returns only the caller's assigned scopes (200), 403 for a player that is not in the session, 404 unknown applicant, 401 without a token.\n    \n- Folder 3 (Lab 3, grades 4-5): two replicas behind the Gateway; round-robin alternates the replicas; a record written through one replica is readable through the other (the service is instance-agnostic).\n    \n- Folder 4 (Lab 3, grades 6 and 9): circuit breaker, manual, see its description.\n    \n\nREQUIRES the service to answer with an X-Instance-Id header (the container id). Folder 3 fails without it.\n\nNOT COVERED HERE\n\n- GET /health: it is polled by Service Discovery inside the Compose network and is not routed by the Gateway. Check it with: docker compose logs discovery-service\n    \n- gRPC (AssignScopes, GetRecordSnapshot): exercised indirectly by starting the session."
   },
   "item": [
     {
-      "name": "Get Record - invalid token (401 from Gateway)",
-      "event": [
+      "name": "0. Setup (Player + Session Service, through the Gateway)",
+      "description": "Registers and logs in three players, opens a session, the junior joins, the moderator starts it (which assigns the scopes).",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Status is 401', () => pm.response.to.have.status(401));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "{{bearer_token_18wu}}"
-          }
-        ],
-        "url": {
-          "raw": "{{university_record_url}}/sessions/test-session/records/x",
-          "host": [
-            "{{university_record_url}}"
-          ],
-          "path": [
-            "sessions",
-            "test-session",
-            "records",
-            "x"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Create Record - Missing session_id (422)",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 422\", () => pm.response.to.have.status(422));",
-              "pm.test(\"Code is VALIDATION_FAILED\", () => pm.expect(pm.response.json().error.code).to.eql(\"VALIDATION_FAILED\"));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token_player1}}"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Register moderator",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('run_id', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{university_record_url}}/records",
-          "host": [
-            "{{university_record_url}}"
           ],
-          "path": [
-            "records"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get Record, unknown applicant (404)",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 404\", () => pm.response.to.have.status(404));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token_player1}}"
-          }
-        ],
-        "url": {
-          "raw": "{{university_record_url}}/sessions/test-session/records/nonexistent-id",
-          "host": [
-            "{{university_record_url}}"
-          ],
-          "path": [
-            "sessions",
-            "test-session",
-            "records",
-            "nonexistent-id"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Create Record - malformed JSON (400)",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 400\", () => pm.response.to.have.status(400));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token_player1}}"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{ \"session_id\":",
-          "options": {
-            "raw": {
-              "language": "json"
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"urmod{{run_id}}\",\n  \"email\": \"urmod{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
             }
-          }
-        },
-        "url": {
-          "raw": "{{university_record_url}}/records",
-          "host": [
-            "{{university_record_url}}"
-          ],
-          "path": [
-            "records"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Create Record",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "const response = pm.response.json();",
-              "pm.collectionVariables.set(\"applicant_id\", response.applicant_id);",
-              "pm.test(\"Status is 201\", () => pm.response.to.have.status(201));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
           },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token_player1}}"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{ \"session_id\": \"test-session\" }",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          }
+          "response": []
         },
-        "url": {
-          "raw": "{{university_record_url}}/records",
-          "host": [
-            "{{university_record_url}}"
+        {
+          "name": "Register junior",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
           ],
-          "path": [
-            "records"
-          ]
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"urjun{{run_id}}\",\n  \"email\": \"urjun{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Register stranger (never joins the session)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"urstr{{run_id}}\",\n  \"email\": \"urstr{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login moderator",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decode(t){ try { return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch(e){ return null; } }",
+                  "",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.test('a JWT came back', () => pm.expect(token).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('token_moderator', token);",
+                  "const claims = decode(token);",
+                  "if (claims) pm.collectionVariables.set('moderator_id', claims.sub);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"urmod{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login junior",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decode(t){ try { return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch(e){ return null; } }",
+                  "",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.test('a JWT came back', () => pm.expect(token).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('token_junior', token);",
+                  "const claims = decode(token);",
+                  "if (claims) pm.collectionVariables.set('junior_id', claims.sub);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"urjun{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login stranger",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decode(t){ try { return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch(e){ return null; } }",
+                  "",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.test('a JWT came back', () => pm.expect(token).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('token_stranger', token);",
+                  "const claims = decode(token);",
+                  "if (claims) pm.collectionVariables.set('stranger_id', claims.sub);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"urstr{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Open a session (moderator)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('session is open but not started', () => pm.expect(b.status).to.eql('created'));",
+                  "pm.collectionVariables.set('session_id', b.session_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Junior joins the session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('joined', () => pm.expect([200,201]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/join",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "join"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Start the session (moderator) - triggers AssignScopes on University Record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('session is active', () => pm.expect(pm.response.json().status).to.eql('active'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/start",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "start"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Open another session and never start it",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('unstarted_session_id', pm.response.json().session_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Get Record",
-      "event": [
+      "name": "1. Create Record",
+      "description": "University Record asks Session Service over gRPC whether the session is running before it creates a record.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-              "pm.test(\"Has assigned_scopes\", () => pm.expect(pm.response.json()).to.have.property(\"assigned_scopes\"));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token_player1}}"
-          }
-        ],
-        "url": {
-          "raw": "{{university_record_url}}/sessions/test-session/records/{{applicant_id}}",
-          "host": [
-            "{{university_record_url}}"
+          "name": "Create Record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('has applicant_id', () => pm.expect(b.applicant_id).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('applicant_id', b.applicant_id);"
+                ]
+              }
+            }
           ],
-          "path": [
-            "sessions",
-            "test-session",
-            "records",
-            "{{applicant_id}}"
-          ]
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - same session_id again (not idempotent by design: a session has many applicants)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('a NEW applicant is minted each time', () => pm.expect(pm.response.json().applicant_id).to.not.eql(pm.collectionVariables.get('applicant_id')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - missing session_id (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('VALIDATION_FAILED', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('VALIDATION_FAILED', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"session_id\":",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - unknown session (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('SESSION_NOT_FOUND', () => pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"11111111-1111-4111-8111-111111111111\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - session not started (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409', () => pm.response.to.have.status(409));",
+                  "pm.test('SESSION_NOT_ACTIVE', () => pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_ACTIVE'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{unstarted_session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record - no token (401 from Gateway)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Get Record - no Authorization header (401)",
-      "event": [
+      "name": "2. Get Record (scopes)",
+      "description": "A player only sees the scopes assigned to them for that session.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 401\", () => pm.response.to.have.status(401));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{university_record_url}}/sessions/test-session/records/{{applicant_id}}",
-          "host": [
-            "{{university_record_url}}"
+          "name": "Get Record - assigned player (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has assigned_scopes', () => pm.expect(b.assigned_scopes).to.be.an('array').and.not.be.empty);",
+                  "pm.test('data holds exactly the assigned scopes', () => pm.expect(Object.keys(b.data).sort()).to.eql([...b.assigned_scopes].sort()));"
+                ]
+              }
+            }
           ],
-          "path": [
-            "sessions",
-            "test-session",
-            "records",
-            "{{applicant_id}}"
-          ]
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record - player not in the session (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));",
+                  "pm.test('NOT_ASSIGNED_TO_SESSION', () => pm.expect(pm.response.json().error.code).to.eql('NOT_ASSIGNED_TO_SESSION'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_stranger}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record - unknown applicant (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('APPLICANT_NOT_FOUND', () => pm.expect(pm.response.json().error.code).to.eql('APPLICANT_NOT_FOUND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/nonexistent-id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "nonexistent-id"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record - no token (401 from Gateway)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Record - invalid token (401 from Gateway)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not.a.jwt",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Get Record - not assigned to session (403)",
-      "event": [
+      "name": "3. Lab 3 - two replicas behind the Gateway",
+      "description": "Run these requests back to back and alone (no other traffic in between), so the Gateway's round-robin order is predictable.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status is 403\", () => pm.response.to.have.status(403));",
-              "pm.test(\"Code is NOT_ASSIGNED_TO_SESSION\", () => pm.expect(pm.response.json().error.code).to.eql(\"NOT_ASSIGNED_TO_SESSION\"));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token_stranger}}"
-          }
-        ],
-        "url": {
-          "raw": "{{university_record_url}}/sessions/test-session/records/{{applicant_id}}",
-          "host": [
-            "{{university_record_url}}"
+          "name": "Round-robin - first request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('names the replica that answered (X-Instance-Id)', () => {",
+                  "  const i = pm.response.headers.get('X-Instance-Id');",
+                  "  pm.expect(i, 'X-Instance-Id missing: the service must send it, see the README of this collection').to.be.a('string').and.not.be.empty;",
+                  "  pm.collectionVariables.set('first_instance', i);",
+                  "});"
+                ]
+              }
+            }
           ],
-          "path": [
-            "sessions",
-            "test-session",
-            "records",
-            "{{applicant_id}}"
-          ]
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Round-robin - next request goes to the other replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('answered by the OTHER replica', () => {",
+                  "  const i = pm.response.headers.get('X-Instance-Id');",
+                  "  pm.expect(i).to.be.a('string').and.not.be.empty;",
+                  "  pm.expect(i).to.not.eql(pm.collectionVariables.get('first_instance'));",
+                  "  pm.collectionVariables.set('second_instance', i);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Round-robin - third request wraps back to the first replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('back to the first replica (round-robin wraps around)', () => {",
+                  "  pm.expect(pm.response.headers.get('X-Instance-Id')).to.eql(pm.collectionVariables.get('first_instance'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Instance-agnostic - write through one replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('written_applicant_id', pm.response.json().applicant_id);",
+                  "const i = pm.response.headers.get('X-Instance-Id');",
+                  "pm.test('names the replica', () => pm.expect(i).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('first_instance', i);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Instance-agnostic - read it through the other replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK: the other replica sees the record', () => pm.response.to.have.status(200));",
+                  "pm.test('answered by a different replica', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.not.eql(pm.collectionVariables.get('first_instance')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{written_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{written_applicant_id}}"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
+    },
+    {
+      "name": "4. Circuit breaker (MANUAL - see this folder's description)",
+      "description": "University Record calls Session Service over gRPC and guards each Session instance with a circuit breaker (3 failures in 5 s x 3.5 = 17.5 s, then the instance is removed from Service Discovery and from its pool).\n\nSTEPS\n1. In a terminal: docker pause pad-team-17-server-moderation-session-service-1   (the replica freezes but stays registered)\n2. Run the first request here 8 times (Collection Runner, iterations = 8, or send it by hand). Calls that hit the frozen replica time out after 3 s: 503 UPSTREAM_UNAVAILABLE; the others are 201.\n3. Watch: docker compose logs -f university-record-service  -> 'Circuit breaker ... threshold reached' and 'Session Service instance REMOVED'.\n4. Run the second request: now every call is 201 (the frozen replica is out of the pool).\n5. docker unpause pad-team-17-server-moderation-session-service-1  -> after the 30 s quarantine and its next heartbeat the instance is added back ('Session Service instance added').\n\nThe container name may differ: docker compose ps.",
+      "item": [
+        {
+          "name": "Create Record while one Session replica is frozen (201 or 503 until the breaker trips)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 (healthy replica) or 503 (frozen replica)', () => pm.expect([201,503]).to.include(pm.response.code));",
+                  "if (pm.response.code === 503) pm.test('503 is UPSTREAM_UNAVAILABLE', () => pm.expect(pm.response.json().error.code).to.eql('UPSTREAM_UNAVAILABLE'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Record after the breaker removed the frozen replica (always 201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
-  "event": [
-    {
-      "listen": "prerequest",
-      "script": {
-        "type": "text/javascript",
-        "exec": [
-          "// Self-login: registers (or re-uses) test players through the Gateway and stores fresh JWTs.",
-          "// Nothing needs to be copied from the Player collection. Re-runs are safe: 409 = already registered.",
-          "const base = pm.collectionVariables.get('university_record_url');",
-          "const PASSWORD = 'secret123';",
-          "const USERS = [{\"tokenVar\": \"token_player1\", \"idVar\": \"player1_id\", \"email\": \"uni-record-player1@example.com\", \"username\": \"unirecordplayer1\"}, {\"tokenVar\": \"token_stranger\", \"idVar\": \"stranger_id\", \"email\": \"uni-record-stranger@example.com\", \"username\": \"unirecordstranger\"}];",
-          "",
-          "function decode(token) {",
-          "  try {",
-          "    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
-          "  } catch (e) { return null; }",
-          "}",
-          "function stillValid(token) {",
-          "  const c = token && decode(token);",
-          "  return !!(c && c.exp * 1000 > Date.now() + 60000);",
-          "}",
-          "function post(path, body, cb) {",
-          "  pm.sendRequest({",
-          "    url: base + path, method: 'POST',",
-          "    header: { 'Content-Type': 'application/json' },",
-          "    body: { mode: 'raw', raw: JSON.stringify(body) }",
-          "  }, cb);",
-          "}",
-          "USERS.forEach(u => {",
-          "  if (stillValid(pm.collectionVariables.get(u.tokenVar))) return;",
-          "  post('/players', { username: u.username, email: u.email, password: PASSWORD }, () => {",
-          "    post('/players/login', { email: u.email, password: PASSWORD }, (err, res) => {",
-          "      if (err || res.code !== 200) {",
-          "        console.error('Login failed for ' + u.email + ' - is the stack up and Player Service healthy?', err || res.code);",
-          "        return;",
-          "      }",
-          "      const token = res.json().token;",
-          "      pm.collectionVariables.set(u.tokenVar, token);",
-          "      pm.collectionVariables.set(u.idVar, decode(token).sub);",
-          "      console.log(u.tokenVar + ' ready, player id = ' + decode(token).sub);",
-          "      if (u.tokenVar === 'token_player1') {",
-          "        console.log('ONE-TIME: give this player a scope assignment (needs the DB volume to persist):\\n' +",
-          "          \"grpcurl -plaintext -proto services/university-record-service/src/main/proto/university_record.proto \" +",
-          "          \"-d '{\\\"session_id\\\":\\\"test-session\\\",\\\"assignments\\\":[{\\\"player_id\\\":\\\"\" + decode(token).sub +",
-          "          \"\\\",\\\"scopes\\\":[\\\"enrollment\\\",\\\"courses\\\"]}]}' localhost:9092 UniversityRecordService/AssignScopes\");",
-          "      }",
-          "    });",
-          "  });",
-          "});"
-        ]
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token_moderator}}",
+        "type": "string"
       }
-    }
-  ],
+    ]
+  },
   "variable": [
     {
-      "key": "university_record_url",
+      "key": "base_url",
       "value": "http://localhost:8090"
     },
     {
-      "key": "applicant_id",
+      "key": "run_id",
       "value": ""
     },
     {
-      "key": "token_player1",
+      "key": "token_moderator",
+      "value": ""
+    },
+    {
+      "key": "token_junior",
       "value": ""
     },
     {
@@ -398,7 +1320,11 @@
       "value": ""
     },
     {
-      "key": "player1_id",
+      "key": "moderator_id",
+      "value": ""
+    },
+    {
+      "key": "junior_id",
       "value": ""
     },
     {
@@ -406,8 +1332,28 @@
       "value": ""
     },
     {
-      "key": "bearer_token_18wu",
-      "secret": true
+      "key": "session_id",
+      "value": ""
+    },
+    {
+      "key": "unstarted_session_id",
+      "value": ""
+    },
+    {
+      "key": "applicant_id",
+      "value": ""
+    },
+    {
+      "key": "written_applicant_id",
+      "value": ""
+    },
+    {
+      "key": "first_instance",
+      "value": ""
+    },
+    {
+      "key": "second_instance",
+      "value": ""
     }
   ]
 }
