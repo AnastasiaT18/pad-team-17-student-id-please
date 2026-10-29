@@ -1,303 +1,788 @@
 {
   "info": {
-    "_postman_id": "6129389f-9988-4e75-9c74-289ffa39f6e5",
     "name": "Server Rules Service",
-    "description": "Server Rules Service, tested through the Gateway (http://localhost:8090). The service's own REST port is not published, so the Gateway is the only way in.\n\nAUTH: nothing to set up. A collection pre-request script registers a test player (server-rules-tester@example.com) through the Gateway, logs in, and stores the JWT in the `token` variable. Every request inherits `Bearer {{token}}`. The token is refreshed automatically when it expires. If login fails, check Postman Console (View > Show Postman Console) and make sure Player Service and the Gateway are up (`docker compose ps`, `curl localhost:8090/health`).\n\nRUN ORDER: run the collection top to bottom.\n1-2. No token / invalid token -> 401 from the Gateway (proves auth is enforced at the Gateway).\n3. Get Rules -> 200.\n4. Replace Rules -> 200. NOTE: this wipes the previous rule set and replaces it with one rule.\n5-7. Validation errors: missing condition (422), missing rules field (422), malformed JSON (400).\n\nNOT COVERED HERE: the gRPC EvaluateApplicant method (host port 9091). Test it with grpcurl or a Postman gRPC request using services/server-rules-service/src/main/proto/server_rules.proto.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "_exporter_id": "50442487",
-    "_collection_link": "https://go.postman.co/collection/50442487-6129389f-9988-4e75-9c74-289ffa39f6e5?source=collection_link"
+    "description": "Server Rules Service, tested through the Gateway (http://localhost:8090). Its own ports are not published, so the Gateway is the only way in.\n\nSELF-CONTAINED: folder 0 registers and logs in a throwaway player (a fresh one every run). Run the collection top to bottom with the Collection Runner.\n\nNOTE: Replace Rules wipes the previous rule set. This collection leaves the rule set it last wrote ('Only FAF students', plus the second rule from the multi-rule test) in the database.\n\nWHAT IT PROVES\n- Folder 1: the Gateway enforces the token (401).\n- Folder 2: GET/PUT /rules, persistence, replace semantics, validation (422/400).\n- Folder 3 (Lab 3, grades 4-5): two replicas behind the Gateway; round-robin alternates them; a rule written through one replica is read through the other (instance-agnostic).\n\nREQUIRES the service to answer with an X-Instance-Id header (the container id). Folder 3 fails without it.\n\nNOT COVERED HERE\n- GET /health: polled by Service Discovery inside the Compose network, not routed by the Gateway. Check it with: docker compose logs discovery-service\n- gRPC EvaluateApplicant (used by Moderation Service): not reachable from Postman because the port is not published.\n- Circuit breaker: this service makes no outgoing calls, so it has none (the lab asks for it only in services that make calls).\n"
   },
   "item": [
     {
-      "name": "Get Rules - no token (401 from Gateway)",
-      "event": [
+      "name": "0. Setup (Player Service, through the Gateway)",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
-              "pm.test('code is UNAUTHORIZED', () => pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "noauth"
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
-          ],
-          "path": [
-            "rules"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get Rules - invalid token (401 from Gateway)",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
+          "name": "Register tester",
+          "event": [
             {
-              "key": "token",
-              "value": "not.a.jwt",
-              "type": "string"
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('run_id', String(Date.now()));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                ]
+              }
             }
-          ]
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
           ],
-          "path": [
-            "rules"
-          ]
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"srtest{{run_id}}\",\n  \"email\": \"srtest{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login tester",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function decode(t){ try { return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch(e){ return null; } }",
+                  "",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().token;",
+                  "pm.test('a JWT came back', () => pm.expect(token).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('token', token);",
+                  "const claims = decode(token);",
+                  "if (claims) pm.collectionVariables.set('player_id', claims.sub);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"srtest{{run_id}}@example.com\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/players/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "players",
+                "login"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Get Rules",
-      "event": [
+      "name": "1. Gateway authorization",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "pm.test('response has a rules array', () => {",
-              "  const body = pm.response.json();",
-              "  pm.expect(body).to.have.property('rules');",
-              "  pm.expect(body.rules).to.be.an('array');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
+          "name": "Get Rules - no token (401 from Gateway)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));",
+                  "pm.test('UNAUTHORIZED', () => pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'));"
+                ]
+              }
+            }
           ],
-          "path": [
-            "rules"
-          ]
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Rules - invalid token (401 from Gateway)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "not.a.jwt",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Replace Rules",
-      "event": [
+      "name": "2. Rules",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.test('returned rules have generated rule_id and match input', () => {",
-              "  pm.expect(body.rules).to.have.lengthOf(1);",
-              "  pm.expect(body.rules[0]).to.have.property('rule_id');",
-              "  pm.expect(body.rules[0].description).to.eql('Only FAF students');",
-              "  pm.expect(body.rules[0].condition).to.eql('university_status != faf_student');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"rules\": [\n    { \"description\": \"Only FAF students\", \"condition\": \"university_status != faf_student\" }\n  ]\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Get Rules",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('has a rules array', () => pm.expect(pm.response.json().rules).to.be.an('array'));"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
           ],
-          "path": [
-            "rules"
-          ]
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
         },
-        "description": "Replaces the entire active rule set. Note: this wipes the previous rules, so run 'Get Rules' before this if you want to see the prior state."
-      },
-      "response": []
+        {
+          "name": "Replace Rules (one rule)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('generated rule_id, same content', () => {",
+                  "  pm.expect(b.rules).to.have.lengthOf(1);",
+                  "  pm.expect(b.rules[0]).to.have.property('rule_id');",
+                  "  pm.expect(b.rules[0].description).to.eql('Only FAF students');",
+                  "  pm.expect(b.rules[0].condition).to.eql('university_status != faf_student');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\",\n      \"condition\": \"university_status != faf_student\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Rules - the replaced set is persisted",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json().rules;",
+                  "pm.test('exactly the one rule we wrote', () => { pm.expect(r).to.have.lengthOf(1); pm.expect(r[0].description).to.eql('Only FAF students'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - same body again (idempotent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json().rules;",
+                  "pm.test('still exactly one rule, same content', () => { pm.expect(r).to.have.lengthOf(1); pm.expect(r[0].description).to.eql('Only FAF students'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\",\n      \"condition\": \"university_status != faf_student\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules (two rules replace the old set)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('two rules, each with a rule_id', () => { const r = pm.response.json().rules; pm.expect(r).to.have.lengthOf(2); r.forEach(x => pm.expect(x).to.have.property('rule_id')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\",\n      \"condition\": \"university_status != faf_student\"\n    },\n    {\n      \"description\": \"Student id must be set\",\n      \"condition\": \"student_id == null\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - missing condition (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('VALIDATION_FAILED', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - rules field missing (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('VALIDATION_FAILED', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('VALIDATION_FAILED', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"rules\": [",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Rules - back to the one-rule set (so later runs start clean)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\",\n      \"condition\": \"university_status != faf_student\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
     },
     {
-      "name": "Replace Rules - missing condition (422)",
-      "event": [
+      "name": "3. Lab 3 - two replicas behind the Gateway",
+      "description": "Run these requests back to back and alone (no other traffic in between), so the Gateway's round-robin order is predictable.",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
-              "pm.test('error code is VALIDATION_FAILED', () => {",
-              "  const body = pm.response.json();",
-              "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"rules\": [\n    { \"description\": \"Only FAF students\" }\n  ]\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Round-robin - first request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('names the replica that answered (X-Instance-Id)', () => {",
+                  "  const i = pm.response.headers.get('X-Instance-Id');",
+                  "  pm.expect(i, 'X-Instance-Id missing: the service must send it, see the README of this collection').to.be.a('string').and.not.be.empty;",
+                  "  pm.collectionVariables.set('first_instance', i);",
+                  "});"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
           ],
-          "path": [
-            "rules"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Replace Rules - rules field missing (422)",
-      "event": [
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
-              "pm.test('error code is VALIDATION_FAILED', () => {",
-              "  const body = pm.response.json();",
-              "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Round-robin - next request goes to the other replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('answered by the OTHER replica', () => {",
+                  "  const i = pm.response.headers.get('X-Instance-Id');",
+                  "  pm.expect(i).to.be.a('string').and.not.be.empty;",
+                  "  pm.expect(i).to.not.eql(pm.collectionVariables.get('first_instance'));",
+                  "  pm.collectionVariables.set('second_instance', i);",
+                  "});"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
           ],
-          "path": [
-            "rules"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Replace Rules - malformed JSON (400)",
-      "event": [
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
-              "pm.test('error code is VALIDATION_FAILED', () => {",
-              "  const body = pm.response.json();",
-              "  pm.expect(body.error.code).to.eql('VALIDATION_FAILED');",
-              "});"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"rules\": [\n}",
-          "options": {
-            "raw": {
-              "language": "json"
+          "name": "Round-robin - third request wraps back to the first replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('back to the first replica (round-robin wraps around)', () => {",
+                  "  pm.expect(pm.response.headers.get('X-Instance-Id')).to.eql(pm.collectionVariables.get('first_instance'));",
+                  "});"
+                ]
+              }
             }
-          }
-        },
-        "url": {
-          "raw": "{{server_rules_url}}/rules",
-          "host": [
-            "{{server_rules_url}}"
           ],
-          "path": [
-            "rules"
-          ]
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Instance-agnostic - write through one replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const i = pm.response.headers.get('X-Instance-Id');",
+                  "pm.test('names the replica', () => pm.expect(i).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('first_instance', i);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\",\n      \"condition\": \"university_status != faf_student\"\n    },\n    {\n      \"description\": \"Student id must be set\",\n      \"condition\": \"student_id == null\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Instance-agnostic - read it through the other replica",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('answered by a different replica', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.not.eql(pm.collectionVariables.get('first_instance')));",
+                  "pm.test('the other replica returns the rules just written', () => pm.expect(pm.response.json().rules).to.have.lengthOf(2));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Restore the one-rule set",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rules\": [\n    {\n      \"description\": \"Only FAF students\",\n      \"condition\": \"university_status != faf_student\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "rules"
+              ]
+            }
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     }
   ],
   "auth": {
@@ -310,58 +795,14 @@
       }
     ]
   },
-  "event": [
-    {
-      "listen": "prerequest",
-      "script": {
-        "type": "text/javascript",
-        "exec": [
-          "// Self-login: registers (or re-uses) test players through the Gateway and stores fresh JWTs.",
-          "// Nothing needs to be copied from the Player collection. Re-runs are safe: 409 = already registered.",
-          "const base = pm.collectionVariables.get('server_rules_url');",
-          "const PASSWORD = 'secret123';",
-          "const USERS = [{\"tokenVar\": \"token\", \"idVar\": \"player_id\", \"email\": \"server-rules-tester@example.com\", \"username\": \"serverrulestester\"}];",
-          "",
-          "function decode(token) {",
-          "  try {",
-          "    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
-          "  } catch (e) { return null; }",
-          "}",
-          "function stillValid(token) {",
-          "  const c = token && decode(token);",
-          "  return !!(c && c.exp * 1000 > Date.now() + 60000);",
-          "}",
-          "function post(path, body, cb) {",
-          "  pm.sendRequest({",
-          "    url: base + path, method: 'POST',",
-          "    header: { 'Content-Type': 'application/json' },",
-          "    body: { mode: 'raw', raw: JSON.stringify(body) }",
-          "  }, cb);",
-          "}",
-          "USERS.forEach(u => {",
-          "  if (stillValid(pm.collectionVariables.get(u.tokenVar))) return;",
-          "  post('/players', { username: u.username, email: u.email, password: PASSWORD }, () => {",
-          "    post('/players/login', { email: u.email, password: PASSWORD }, (err, res) => {",
-          "      if (err || res.code !== 200) {",
-          "        console.error('Login failed for ' + u.email + ' - is the stack up and Player Service healthy?', err || res.code);",
-          "        return;",
-          "      }",
-          "      const token = res.json().token;",
-          "      pm.collectionVariables.set(u.tokenVar, token);",
-          "      pm.collectionVariables.set(u.idVar, decode(token).sub);",
-          "      console.log(u.tokenVar + ' ready, player id = ' + decode(token).sub);",
-          "",
-          "    });",
-          "  });",
-          "});"
-        ]
-      }
-    }
-  ],
   "variable": [
     {
-      "key": "server_rules_url",
+      "key": "base_url",
       "value": "http://localhost:8090"
+    },
+    {
+      "key": "run_id",
+      "value": ""
     },
     {
       "key": "token",
@@ -369,6 +810,14 @@
     },
     {
       "key": "player_id",
+      "value": ""
+    },
+    {
+      "key": "first_instance",
+      "value": ""
+    },
+    {
+      "key": "second_instance",
       "value": ""
     }
   ]
