@@ -361,6 +361,7 @@ services:
       PORT: 3000
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
+      GRPC_DISCOVERY_ENABLED: "true"
 
       DB_HOST: moderation-db
       DB_PORT: 5432
