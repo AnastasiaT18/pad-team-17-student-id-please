@@ -389,12 +389,16 @@ services:
 
   discord-dms-service:
     image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
-    container_name: pad17-discord-dms-service
+
+    deploy:
+      replicas: 2
 
     environment:
       PORT: 3000
       GRPC_URL: 0.0.0.0:9090
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_HEARTBEAT_SECONDS: 15
+      REDIS_URL: redis://redis:6379
 
       DB_HOST: discord-dms-db
       DB_PORT: 5432
@@ -405,14 +409,45 @@ services:
       TASK_TIMEOUT_MS: 5000
       MAX_CONCURRENT_TASKS: 20
 
-    ports:
-      - "8086:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.discord.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.discord.entrypoints=discord"
+      - "traefik.http.routers.discord.service=discord"
+      - "traefik.http.services.discord.loadbalancer.server.port=3000"
+      - "traefik.http.services.discord.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.discord.loadbalancer.sticky.cookie.name=discord_route"
+      - "traefik.http.services.discord.loadbalancer.sticky.cookie.httpOnly=true"
 
     depends_on:
       discord-dms-db:
         condition: service_healthy
       discovery-service:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  discord-proxy:
+    image: traefik:v3.6.16
+    container_name: pad17-discord-proxy
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.discord.address=:80"
+    ports:
+      - "8086:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - discord-dms-service
 
 volumes:
   rabbitmq-data:
