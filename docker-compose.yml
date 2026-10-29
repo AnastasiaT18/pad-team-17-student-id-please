@@ -353,11 +353,14 @@ services:
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
     image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.4.0}
-    container_name: pad17-moderation-service
+
+    deploy:
+      replicas: 2
 
     environment:
       PORT: 3000
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_HEARTBEAT_SECONDS: 15
 
       DB_HOST: moderation-db
       DB_PORT: 5432
