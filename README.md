@@ -2327,6 +2327,74 @@ The mock will later be replaced by a gRPC client implementing the same `SessionC
 
 The current scope-to-channel mapping is part of the Lab 1 implementation and can be revised when the final inter-service contract and channel configuration rules are integrated.
 
+### Service Discovery
+
+Lab 3. Every service instance registers here; the Gateway and the services that call each other
+look instances up here; and every instance's health is watched from here. The source is
+`services/discovery-service` (Python, FastAPI) - its README has the details.
+
+The services register as `player-service`, `server-moderation-session-service`, `applicant-service`,
+`credential-service`, `university-record-service`, `server-rules-service`, `moderation-service` and
+`discord-dms-service`.
+
+**Registration - every service, on startup, and again as a heartbeat**
+```json
+// POST /register
+{
+  "service_name": "applicant-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8081,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+
+// Response 200 - "registered" for a new instance, "updated" for a heartbeat
+{ "action": "registered", "instance": { "...": "as sent", "registered_at": "RFC3339", "healthy": false } }
+```
+`instance_id` is the container's hostname and `host` its address, so callers reach that exact
+replica; `grpc_port` is optional. A new instance starts with `healthy: false` and gets traffic once
+the first health check finds it UP, within 5 seconds. An instance that keeps renewing its
+registration comes back by itself after Service Discovery restarts, or after a caller's circuit
+breaker removed it.
+
+**Lookup**
+
+`GET /services/{service_name}` - every instance of the service, each with its `healthy` flag;
+callers only use the healthy ones. `404 SERVICE_NOT_FOUND` if none ever registered.
+`GET /services` lists every service.
+
+**Removal**
+
+`DELETE /services/{service_name}/{instance_id}?reason={why}` - sent by the instance itself, or by a
+caller whose circuit breaker gave up on it; `reason` is optional. An instance leaving without a reason
+(a shutdown) is only logged. Every other removal is an alert that says who asked and why, e.g.
+`REMOVED instance: service=server-moderation-session-service instance=5c0d2e9a71b4 address=172.18.0.11:3001 requested_by=172.18.0.7 reason=circuit breaker of applicant-service tripped (3 failed calls within 17500 ms)`.
+
+**Health checks and alerts**
+
+Every 5 seconds Service Discovery calls every instance's `health_path`. Every service answers with
+its state and its load:
+```json
+{ "status": "UP", "load": { "utilization": 0.9 } }
+```
+- `200` with `"status": "UP"` makes the instance healthy. Any other answer makes it unhealthy - it
+  stays registered, and gets traffic again once it reports UP. No answer 6 checks in a row removes
+  it: its container is gone.
+- A repeated registration (the heartbeat) keeps the health the last check found, unless the
+  instance's address changed; it never makes an instance healthy by itself.
+- Every change of state is an alert, and so is a `load.utilization` at or above
+  `CRITICAL_LOAD_THRESHOLD` (`0.8`). Alerts are logged, and posted to the developers' Telegram group
+  by the team's bot when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set in `.env` (the bot comes
+  from @BotFather; the group's id is in the bot's `getUpdates` once it is in the group - the steps
+  are in Service Discovery's README). The token is a secret: `.env` only, never git.
+
+**Running it:** image `dannacojocari/pad-team-17-discovery-service:0.1.0` (`DISCOVERY_IMAGE`),
+listening on `8000` inside the Compose network only. `GET /health` reports its own state: whether
+its health monitor runs, and how many services and instances it holds. A release is a `v*.*.*` Git
+tag on its `main`; the image carries the same version without the `v`.
+
 ## GitHub Workflow
 
 ### Branches

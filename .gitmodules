@@ -27,4 +27,4 @@
 	url = https://github.com/AnastasiaT18/pad-team-17-gateway-service
 [submodule "services/discovery-service"]
 	path = services/discovery-service
-	url = git@github.com:DannaCojocari/pad-team-17-discovery-service.git
+	url = https://github.com/DannaCojocari/pad-team-17-discovery-service
