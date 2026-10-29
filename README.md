@@ -9,8 +9,98 @@ The system is split into 8 microservices, each owning a distinct piece of the ga
 ## Team 17
 - Anastasia Tiganescu, FAF-231 — Server Rules + University Record Services
 - Catalin Darzu, FAF-231  — Applicant and Credential Services
-- Daniela Cojocari, FAF-231  — Moderation + Discord DMS Services
+- Daniela Cojocari, FAF-231  — Moderation + Discord DMs Services
 - Janeta Grigoras, FAF-231  — Player + Server Moderation Session Services
+
+## Running the integrated stack (Lab 3)
+
+The **CPR repository** is the integration point. `docker-compose.yml` starts the eight application
+services (two replicas each), API Gateway, Service Discovery, PostgreSQL databases, RabbitMQ,
+Redis, and the Discord DMs reverse proxy. Services run from their published Docker Hub images;
+Git submodules pin the source-code revisions for review and traceability, rather than building
+those services locally.
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with the shared database passwords, RabbitMQ credentials, JWT secret, and (optionally)
+the Telegram bot settings. **Never commit `.env` or real tokens.** Then run:
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+| Entry point | Address | Purpose |
+|---|---|---|
+| API Gateway | `http://localhost:8090` | Authenticated REST API for clients and Postman |
+| Discord DMs reverse proxy | `http://localhost:8086` | Socket.IO connections and Discord health checks |
+| RabbitMQ management | `http://localhost:15672` | Broker administration (credentials from `.env`) |
+| Service Discovery | `http://discovery-service:8000` inside Compose | Internal registration, lookup, and health monitoring; not exposed on the host |
+
+Moderation and Discord DMs are **not** given fixed `container_name` or published host ports:
+that would prevent normal replication. Traefik owns `8086` and forwards Discord requests to two
+replicas. The Gateway returns this public URL when a client negotiates `GET /ws/discord-dms`.
+
+The Compose defaults for Pair 4 are:
+
+```text
+MODERATION_VERSION=v0.4.0
+DISCORD_DMS_VERSION=v0.4.0
+DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.1.0
+```
+
+The service-image tags are republished in place when new code reaches their respective `main`
+branches; the Git release tags are not moved. **Pull the images again** when a service is released.
+Updating a CPR submodule pointer only changes the recorded source-code revision; it does not
+rebuild, pull, or deploy the Docker image.
+
+### Lab 3 replication and fault tolerance
+
+- **Service Discovery:** each instance registers at startup and renews registration periodically;
+  the health monitor verifies instances and exposes only their `healthy` state to callers.
+  Registration heartbeats restore instances after a Discovery restart or deregistration.
+- **Moderation:** two replicas share PostgreSQL and RabbitMQ. The updated service supports
+  instance-aware gRPC routing and per-instance circuit breakers for Applicant, Credential,
+  University Record, and Server Rules. `GRPC_DISCOVERY_ENABLED` is **off by default**; enable it
+  only after all four dependencies advertise healthy gRPC instances in Discovery. Otherwise the
+  configured static `*_GRPC_URL` endpoints remain in use.
+- **Discord DMs:** two replicas share PostgreSQL and `REDIS_URL=redis://redis:6379`. The Socket.IO
+  Redis adapter distributes events between replicas. Traefik balances incoming connections and
+  issues a sticky `discord_route` cookie, needed for Socket.IO HTTP long-polling sessions.
+- **Alerts:** Discovery logs health-state and critical-load events and, when configured, sends them
+  to the team's Telegram group.
+
+### Verify the deployed stack
+
+```bash
+docker compose ps discord-dms-service moderation-service redis discord-proxy
+docker compose exec -T redis redis-cli ping
+curl -i http://localhost:8086/health
+```
+
+A healthy Redis responds `PONG`. Discord's `/health` returns HTTP `200` and an `instance` field;
+repeated requests **without a saved cookie** can alternate between the two replicas. To check
+registered Discord instances from inside the Compose network:
+
+```bash
+docker compose exec -T discovery-service python -c 'import urllib.request,json; d=json.load(urllib.request.urlopen("http://127.0.0.1:8000/services/discord-dms-service")); print([(x["instance_id"],x["healthy"]) for x in d])'
+```
+
+**Verified locally (29 October 2026):** two healthy Discord instances in Discovery, Redis adapters
+connected in both replicas, HTTP `200` through Traefik, load balancing across both instances,
+and six requests with the same `discord_route` cookie reaching one instance. **Cross-replica
+Socket.IO message delivery still needs an end-to-end test** and should not be inferred solely from
+Redis connectivity or HTTP load balancing.
+
+The two REST collections are
+[`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json)
+and [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
+Their existing API checks remain useful; dedicated Lab 3 failover and cross-replica tests are
+tracked separately and are not yet presented as passing.
 
 ---
 
@@ -74,6 +164,15 @@ the current session.
 
 Arrows point from the service that initiates a call to the service it calls.
 
+What Lab 3 added is in orange. Each of the eight application services is configured to run as two replicas, drawn as two stacked boxes:
+each instance registers with Service Discovery, which checks its health and load every 5 seconds
+and alerts the developers' Telegram group when an instance goes down, recovers, reaches a critical
+load or is removed. Callers that look a service up in Service Discovery send each request to its
+next healthy instance in turn. CB marks a call guarded by a circuit breaker: when it trips, the
+caller removes that instance from Service Discovery. Dashed arrows are RabbitMQ events, from the
+service that publishes the event to the one that consumes it. The diagram's earlier pages, in the
+same file, keep the previous labs' versions.
+
 New applicants can enter through any of Applicant Service, Credential Service or
 University Record Service. Whichever is contacted first mints the `applicant_id`,
 decides that applicant's `deception`, and publishes its `*_initialized` event; the
@@ -117,16 +216,17 @@ Trade-off: heavier services and slower startup — acceptable, since nothing her
 | Server Rules | 3 | Java 21 · Spring Boot | PostgreSQL (rule sets only) |
 | University Record | 3 | Java 21 · Spring Boot, JPA | PostgreSQL |
 | Moderation | 4 | TypeScript · NestJS | PostgreSQL |
-| Discord DMs | 4 | TypeScript · NestJS, Socket.IO | PostgreSQL |
+| Discord DMs | 4 | TypeScript · NestJS, Socket.IO, Redis adapter | PostgreSQL |
 
 ### Communication
 
 | Direction | Protocol | Why |
 |---|---|---|
 | Client → system | REST + JSON via API gateway | Discrete actions (login, join shift, query record, submit verdict). One place to check the JWT. |
-| Client → Discord DMs | WebSocket (Socket.IO) | Chat must be pushed, not polled. |
+| Client → Discord DMs | WebSocket (Socket.IO) via Traefik | Persistent chat connections use port `8086`; sticky sessions and Redis support two replicas. |
 | Service → service, needs an answer | gRPC | Moderation makes 4 calls (Applicant, Credential, Record, Rules) before answering. The `.proto` is one contract both languages generate from, so Java and TS can't drift. |
 | Service → service, fire and forget | RabbitMQ events | `applicant_initialized`, `decision_made`, `shift_ended`. Publisher doesn't wait; a consumer being down doesn't fail the shift. |
+| Discord replica ↔ Discord replica | Redis Pub/Sub (Socket.IO adapter) | Delivers room events between connected clients on different replicas. |
 
 ### Data management
 
@@ -159,6 +259,44 @@ Data lives in one database per service. Services never touch each other's tables
 
 ### Player Service
 
+**Authentication**
+
+Player Service does not verify tokens on incoming requests. The Gateway validates the Bearer
+token and passes the caller's id in the `X-Player-Id` header, which this service trusts. It must only be reachable through the Gateway.
+
+Every endpoint except `POST /players` and `POST /players/login` requires a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or invalid token returns `401 UNAUTHORIZED`.
+
+`POST /players/login` still signs the token, so `JWT_SECRET` must be the same value the Gateway uses to verify it.
+ 
+**Client-facing REST (via API Gateway)**
+
+**Health check**
+
+`GET /health` - reports whether this instance is up. It needs no token, and it is not counted
+against the concurrent request limit, so it keeps answering when the service is overloaded.
+It is meant for Service Discovery, not for clients.
+
+```json
+// Response 200
+{
+  "status": "UP",
+  "service": "player-service",
+  "instance": "2742769a5415",
+  "load": { "utilization": 0.04 }
+}
+
+// Response 503 (the database is unreachable)
+{ "status": "DOWN", "service": "player-service", "instance": "2742769a5415" }
+```
+
+- `instance` is the container id (`HOSTNAME`), so replicas of the service can be told apart.
+- `utilization` is the busy request slots divided by `MAX_CONCURRENT_REQUESTS` (0.0 to 1.0).
+
+**Service Discovery**
+
+On startup the service registers itself with Service Discovery (`POST /register`) with its
+service name (`player-service`), instance id (`HOSTNAME`), host and port. The service registers again every `SERVICE_HEARTBEAT_MS` (default 20000), so an instance that was removed from Discovery, or a Discovery that restarted, gets it back.
+ 
 `POST /players` - register a new player account
 ```json
 // Request
@@ -182,7 +320,7 @@ Data lives in one database per service. Services never touch each other's tables
 **Errors:** `401 INVALID_CREDENTIALS` if the email/password combination is wrong.
  
  
-`GET /players/{player_id}` - fetch profile
+`GET /players/{player_id}` - fetch profile (requires auth)
 ```json
 // Response 200
 {
@@ -219,7 +357,7 @@ Data lives in one database per service. Services never touch each other's tables
 **Errors:** `422 VALIDATION_FAILED` if a field is malformed, `403 FORBIDDEN` if the caller isn't this player, `404 PLAYER_NOT_FOUND`.
  
  
-`GET /players/{player_id}/friends` - list a player's friends
+`GET /players/{player_id}/friends` - list a player's friends (requires auth)
 ```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
@@ -284,11 +422,11 @@ Applied per `player_id` to update `xp`, `level`, `shifts_completed`, `disciplina
 Idempotent on `(session_id, player_id)`.
  
  
-For Lab 1, the RabbitMQ consumer is not yet wired to a real broker. The event contract and the
-handling logic (`PlayersService.applyShiftEnded`) are implemented and covered by a unit test
-(`players.service.spec.ts`) that drives the method directly with a `shift_ended`-shaped payload,
-since Session Service's own publisher is also mocked for Lab 1.
- 
+The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange
+`pad17.events` (override with `RABBITMQ_EXCHANGE`) with routing key `shift_ended`. A message that
+fails validation or processing is rejected without requeue. The handling logic
+(`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
+
 ## Persistence
  
 The Player Service owns its PostgreSQL database.
@@ -304,7 +442,7 @@ No other microservice directly accesses the Player Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.2.0`
+1. Pull the public image — `docker pull janetag/player-service:0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -315,7 +453,9 @@ No other microservice directly accesses the Player Service database.
 
 **Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
 
-**DockerHub:** `janetag/player-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so an instance removed by a caller's circuit breaker comes back by itself.
+
+**DockerHub:** `janetag/player-service:0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 
@@ -327,16 +467,19 @@ No other microservice directly accesses the Player Service database.
 
 **Client-facing REST (via API Gateway)**
 
-The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never receives a token; its REST port is not published in the shared stack. A request without `X-Player-Id` (one that did not come through the Gateway) returns `401 UNAUTHORIZED`.
+The Gateway validates the Bearer token and passes the caller's id in the `X-Player-Id` header, which this service trusts. It must only be reachable through the Gateway.
  
 `POST /sessions` - create a session
 ```json
 // Response 201
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
 ```
+Optional header `Idempotency-Key: <string, up to 200 characters>`. If the same moderator sends the
+same key again, no new session is created: the response is again `201` and shows the existing
+session in its current state. Without the header, every call creates a new session. This makes
+it safe to retry a `POST /sessions` that timed out (`504`).
 
-
-`POST /sessions/{session_id}/join` - the calling player (identified by X-Player-Id) joins an existing, not-yet-started session as Junior Moderator
+`POST /sessions/{session_id}/join` - the calling player (identified by the `X-Player-Id` header set by the Gateway) joins an existing, not-yet-started session as Junior Moderator
 ```json
 // Response 200
 { "session_id": "uuid", "status": "created", "roles": { "moderator": "uuid", "junior_moderators": ["uuid"] } }
@@ -345,14 +488,19 @@ The Gateway validates the `Authorization: Bearer <token>` header and does not fo
 **Errors:** `404 SESSION_NOT_FOUND`, `409 SESSION_ALREADY_STARTED` if the session is no longer in `created` status, `409 ALREADY_JOINED` if the calling player is already in this session.
 
 
-`POST /sessions/{session_id}/start` - mark the session active, start the shift, and assign each Junior Moderator the record scope(s) they'll have access to for the whole shift (via
-`UniversityRecordService.AssignScopes`, below).
+`POST /sessions/{session_id}/start` - mark the session active, assign each Junior Moderator
+their record scope(s) through `UniversityRecordService.AssignScopes`, provision Discord
+channels and participant permissions through `DiscordDmsService.ProvisionChannels`, and
+load the first applicant through `ApplicantService.GetNextApplicant`.
+
 ```json
 // Response 200
 { "session_id": "uuid", "status": "active", "started_at": "RFC3339" }
 ```
 
-**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended. `503 UPSTREAM_UNAVAILABLE` if a downstream service is unreachable or too slow, `502 UPSTREAM_ERROR` if it rejects the call.
+**Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_ALREADY_STARTED` if it's already active or ended, `503 UPSTREAM_UNAVAILABLE` if a downstream service is unreachable or too slow, `502 UPSTREAM_ERROR` if it rejects the call.
+
+If a downstream call fails, the session is put back to `created` and the Moderator can call `start` again.
 
 
 `GET /sessions/{session_id}` - full state
@@ -397,7 +545,7 @@ The Gateway validates the `Authorization: Bearer <token>` header and does not fo
 
 Triggers publishing `shift_ended` (below).
 
-**Outgoing gRPC calls (needs an answer)**
+**Outgoing gRPC calls**
 
 `ApplicantService.GetNextApplicant`
 ```proto
@@ -408,19 +556,27 @@ message NextApplicantResponse { string applicant_id = 1; }
 
 `DiscordDmsService.ProvisionChannels`
 ```proto
-rpc ProvisionChannels (ProvisionChannelsRequest) returns (ProvisionChannelsResponse);
+rpc ProvisionChannels (ProvisionChannelsRequest)
+    returns (ProvisionChannelsResponse);
+
 message ProvisionChannelsRequest {
   string session_id = 1;
   repeated Participant participants = 2;
 }
+
 message Participant {
   string player_id = 1;
   string role = 2; // moderator | junior_moderator
   repeated string scopes = 3; // enrollment | courses | schedule | messages
 }
-message ProvisionChannelsResponse { bool success = 1; }
+
+message ProvisionChannelsResponse {
+  bool success = 1;
+}
 ```
-The Moderator receives all scopes; each Junior Moderator receives only their assigned scope(s).
+
+For Discord channel permissions, the Moderator receives all available scopes, while each
+Junior Moderator receives only their assigned scope(s).
 
 `UniversityRecordService.AssignScopes`
 ```proto
@@ -435,6 +591,33 @@ message PlayerScopeAssignment {
 }
 message AssignScopesResponse { bool success = 1; }
 ```
+
+When a gRPC URL is empty, the service uses a local mock client, so the REST API can run without
+all upstream services. In the team stack, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`
+and `DISCORD_DMS_GRPC_URL` are all set and use real gRPC.
+
+**Incoming gRPC calls**
+
+The service also runs a gRPC server on `GRPC_PORT` (default `9090`), so other services can check a session's status. It is not exposed through the Gateway.
+
+`SessionService.GetSessionStatus` (called by University Record Service before creating a record; Applicant and Credential can reuse it)
+```proto
+service SessionService {
+  rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+}
+
+message GetSessionStatusRequest {
+  string session_id = 1;
+}
+
+message GetSessionStatusResponse {
+  string status = 1;   // "created" | "active" | "ended"
+}
+```
+
+An unknown session (or an id that is not a valid UUID) is answered with gRPC status `NOT_FOUND`. The proto file is `src/proto/session.proto`; callers use the same file.
+
+When more than `MAX_CONCURRENT_REQUESTS` gRPC calls are in flight, new calls are answered with gRPC status `RESOURCE_EXHAUSTED`.
 
 **Events published (RabbitMQ)**
 
@@ -463,6 +646,56 @@ message AssignScopesResponse { bool success = 1; }
 Applied to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next
 `GetNextApplicant` call.
 
+**Health check**
+
+`GET /health` - reports whether this instance is up. It needs no token, and it is not counted
+against the concurrent request limit, so it keeps answering when the service is overloaded.
+It is meant for Service Discovery, not for clients.
+
+```json
+// Response 200
+{
+  "status": "UP",
+  "service": "server-moderation-session-service",
+  "instance": "2742769a5415",
+  "load": { "utilization": 0.04 }
+}
+
+// Response 503 (the database is unreachable)
+{ "status": "DOWN", "service": "server-moderation-session-service", "instance": "2742769a5415" }
+```
+
+- `instance` is the container id (`HOSTNAME`), so replicas of the service can be told apart.
+- `utilization` is the busiest of the HTTP and gRPC counters (0.0 to 1.0): busy slots divided by
+  `MAX_CONCURRENT_REQUESTS`, counted separately for HTTP requests and gRPC calls.
+
+**Service Discovery**
+
+On startup the service registers itself with Service Discovery (`POST /register`) with its
+service name (`server-moderation-session-service`), instance id (`HOSTNAME`), host and port. If `SERVICE_DISCOVERY_URL` is not set, registration is skipped. If Discovery cannot be reached, it retries 5 times, 3 seconds apart, and logs an error. After
+that, the service registers again every `SERVICE_HEARTBEAT_MS` (default 20000), so an instance that was removed from Discovery, or a Discovery that restarted, gets it back. The service keeps running either way.
+
+**Circuit Breaker**
+
+When `SERVICE_DISCOVERY_URL` is set, the Applicant, University Record and Discord DMs clients
+look up the instances of the service in Service Discovery (names `applicant-service`,
+`university-record-service`, `discord-dms-service`, with a `grpc_port`) and call them in turn.
+
+Each instance has its own circuit breaker. After 3 failed calls within 17.5 s (task timeout
+x 3.5), the instance is removed from Discovery (`DELETE /services/{name}/{instance_id}`) and
+the log shows `Circuit breaker tripped ... removing the instance from Discovery`. A removed
+instance comes back by itself when it registers again (heartbeat).
+
+- Only outages count: a timeout, `UNAVAILABLE` or `DEADLINE_EXCEEDED`. Answers like
+  `NOT_FOUND` do not.
+- After a trip the count starts again from zero.
+- The count is kept in memory by each replica, so each replica counts its own failures, and an
+  instance is removed as soon as any one replica sees 3 failures.
+
+If Discovery has no instance of the service, the fixed address (`APPLICANT_GRPC_URL`,
+`UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`) is used. That address has no breaker, and
+nothing is removed. Without `SERVICE_DISCOVERY_URL`, only the fixed address is used.
+
 ## Persistence
 
 The Session Service owns its PostgreSQL database.
@@ -477,7 +710,7 @@ No other microservice directly accesses the Session Service database.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.2.0`
+1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.3.1`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
@@ -486,7 +719,9 @@ No other microservice directly accesses the Session Service database.
 
 **Ports:** not published on the host; reachable only through the Gateway (localhost:8090)
 
-**DockerHub:** `janetag/server-moderation-session-service:0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so a removed instance comes back by itself. The Applicant, University Record and Discord DMs clients look their instances up in Discovery (`applicant-service`, `university-record-service`, `discord-dms-service`), call them in turn, and remove an instance from Discovery after 3 failed calls in 17.5 s. The fixed `*_GRPC_URL` addresses are used when Discovery has no instance of a service.
+
+**DockerHub:** `janetag/server-moderation-session-service:0.3.1` (public, `linux/amd64` + `linux/arm64`)
 
 **Schema:** created by the service itself at startup, so the database container comes up empty.
 
@@ -528,8 +763,8 @@ records — never from `deception` itself.
 
 **Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
 is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
-it is not running. The session check is served by a mock until Server Moderation Session Service
-exists - see "Running this service" below.
+it is not running, `503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be
+asked - see "Shift check and circuit breaker (Lab 3)" below.
 
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
@@ -577,7 +812,8 @@ published - the claim is Applicant Service's alone.
 **Errors:** `422 VALIDATION_FAILED` if no field is given, if `year` is outside 1-6, if a text field is
 blank, or if the body tries to change `student_id`, `applicant_id` or `session_id`;
 `400 VALIDATION_FAILED` if the body is not valid JSON; `404 APPLICANT_NOT_FOUND`;
-`409 SESSION_NOT_ACTIVE` if the applicant's shift is no longer running.
+`409 SESSION_NOT_ACTIVE` if the applicant's shift is no longer running;
+`503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be asked.
 
 `DELETE /applicants/{applicant_id}` - removes the applicant
 ```json
@@ -600,7 +836,7 @@ The following two error responses apply to every REST endpoint above:
 Served on port `9090` inside the Compose network (`applicant-service:9090`), not published on the host. The
 contract is `services/applicant-service/src/main/proto/applicant.proto` — `package applicant`, service `ApplicantService`;
 callers generate their stubs from it (NestJS: `package: 'applicant'`). Failures come back as gRPC status codes:
-`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant, `FAILED_PRECONDITION` for `GetNextApplicant` on a shift that is no longer running.
+`INVALID_ARGUMENT` for an id that is not a UUID, `NOT_FOUND` for an unknown applicant, `FAILED_PRECONDITION` for `GetNextApplicant` on a shift that is no longer running, `UNAVAILABLE` when Server Moderation Session Service could not be asked whether it is.
 
 `ApplicantService.GetNextApplicant` - called by Server Moderation Session Service to advance a
 shift to its next applicant. Every call mints a new applicant for the shift (same as `POST /applicants`),
@@ -635,6 +871,23 @@ message Applicant {
 }
 ```
 
+
+**Outgoing gRPC (needs an answer)**
+
+`SessionService.GetSessionStatus` on Server Moderation Session Service - asked before an applicant
+joins a shift (`POST /applicants`, `PATCH /applicants/{applicant_id}` and `GetNextApplicant`). The contract is a copy of the Session Service's own proto file; like that
+file it declares no package, so the service is `SessionService` on the wire.
+
+```proto
+rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+
+message GetSessionStatusRequest { string session_id = 1; }
+
+// "created" | "active" | "ended"; a session that does not exist is the status NOT_FOUND
+message GetSessionStatusResponse { string status = 1; }
+```
+`active` lets the applicant in, `created` and `ended` are `409 SESSION_NOT_ACTIVE`, and `NOT_FOUND` is
+`404 SESSION_NOT_FOUND`.
 
 **Events published (RabbitMQ)**
 
@@ -690,27 +943,100 @@ initialized the applicant itself, and takes `deception` from that event rather t
 own. That is what keeps the claim, the documents and the records describing the same lie.
 Idempotent on `applicant_id` — an applicant is only initialized once, however many of the events arrive.
 
+**Status endpoint (Lab 3)**
+
+`GET /health` - this instance's state, polled by Service Discovery inside the Compose network. It is
+not routed through the Gateway.
+```json
+// Response 200, or 503 once a check is DOWN
+{
+  "status": "UP",
+  "service": "applicant-service",
+  "instance": "3f2a9c1b7d4e",
+  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "load": { "active": 3, "max": 20, "utilization": 0.15 }
+}
+```
+`load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
+1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
+threshold.
+
+**Service Discovery and replicas (Lab 3)**
+
+Every replica registers on startup:
+```json
+// POST {SERVICE_DISCOVERY_URL}/register
+{
+  "service_name": "applicant-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8081,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+```
+`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
+exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
+instance removes itself (`DELETE /services/applicant-service/{instance_id}`) once it is DOWN and on
+shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
+failed (`?reason=reported DOWN: database`), and Service Discovery passes that on in its alert.
+
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
+round-robin is visible from the client: two requests in a row to `/applicants` show two different ids.
+
+The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
+them, so nothing depends on which replica a request or an event reaches. `applicant-service:9090`
+resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+`grpc_port`).
+
+**Shift check and circuit breaker (Lab 3)**
+
+Applicant Service's one synchronous call is the shift check above - `GetSessionStatus` over gRPC.
+`SESSION_DIRECTORY: grpc` in the Compose file turns it on; everything else the service learns from its
+peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
+
+- **Which instance** - the healthy Session instances Service Discovery lists, in turn (round-robin).
+  While Discovery does not list the Session Service at all, the call goes to
+  `server-moderation-session-service:9090`. When Discovery knows it but has no healthy instance,
+  none is called.
+- **A failure** - an error status, or no answer within `SESSION_TIMEOUT` (2 s); `NOT_FOUND` is an
+  answer, not a failure. The next instance is asked straight away: the check only reads.
+- **Tripping** - 3 failures of one instance within `REQUEST_TIMEOUT` x 3.5 (17.5 s) trip its breaker:
+  the trip is logged at ERROR, and the instance is removed from Service Discovery with
+  `DELETE /services/server-moderation-session-service/{instance_id}?reason=circuit breaker of applicant-service tripped (3 failed calls within 17500 ms)`,
+  so the Gateway and every other caller stop using it and Discovery alerts the developers. This
+  replica then leaves it alone for 17.5 s; after that the first success closes the breaker and the
+  first failure trips it again.
+- **No instance answering** - `503 SESSION_SERVICE_UNAVAILABLE`.
+
+Every replica keeps its own breakers, and every Session instance has its own, so one broken
+Session replica does not cut the service off from the healthy one.
+
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:2.1.1`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:3.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
-   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+   - `SESSION_DIRECTORY` — `grpc` checks shifts with Server Moderation Session Service, as the team's Compose file does; `mock`, the default, answers in its place for running the service alone (`MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS`)
+   - `SESSION_SERVICE_NAME` (default `server-moderation-session-service`), `SESSION_GRPC_ADDRESS` (default `server-moderation-session-service:9090`), `SESSION_TIMEOUT` (default `2s`) — optional; where the Session Service is found and how long one instance gets to answer
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+   - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
+   - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:2.1.1` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:3.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
-**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
+**Running it without Server Moderation Session Service:** with `SESSION_DIRECTORY=mock` (the service's own default) a mock answers the shift check: every session counts as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running). The team's Compose file uses `grpc`, so the Postman collection opens a real shift first.
 
 **Source code / build details:** private repo `pad-team-17-applicant-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -740,8 +1066,8 @@ first of the three applicant-side services to be contacted. It mints the `applic
 
 **Errors:** `422 VALIDATION_FAILED` if `session_id` is missing, `400 VALIDATION_FAILED` if the body
 is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
-it is not running. The session check is served by a mock until Server Moderation Session Service
-exists - see "Running this service" below.
+it is not running, `503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be
+asked - see "Shift check and circuit breaker (Lab 3)" below.
 
 `GET /credentials/{applicant_id}` - fetch an applicant's credentials and their validity
 ```json
@@ -829,6 +1155,23 @@ message DocumentStatus { bool valid = 1; string issue = 2; }
 ```
 
 
+**Outgoing gRPC (needs an answer)**
+
+`SessionService.GetSessionStatus` on Server Moderation Session Service - asked before an applicant
+joins a shift (`POST /credentials`). The contract is a copy of the Session Service's own proto file; like that
+file it declares no package, so the service is `SessionService` on the wire.
+
+```proto
+rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+
+message GetSessionStatusRequest { string session_id = 1; }
+
+// "created" | "active" | "ended"; a session that does not exist is the status NOT_FOUND
+message GetSessionStatusResponse { string status = 1; }
+```
+`active` lets the applicant in, `created` and `ended` are `409 SESSION_NOT_ACTIVE`, and `NOT_FOUND` is
+`404 SESSION_NOT_FOUND`.
+
 **Events published (RabbitMQ)**
 
 `credential_initialized` - published when Credential Service is the first to be contacted for a new applicant.
@@ -882,27 +1225,100 @@ initialized the applicant itself, and forges them according to that event's `dec
 document contradicts the records in a specific, discoverable way instead of at random.
 Idempotent on `applicant_id`.
 
+**Status endpoint (Lab 3)**
+
+`GET /health` - this instance's state, polled by Service Discovery inside the Compose network. It is
+not routed through the Gateway.
+```json
+// Response 200, or 503 once a check is DOWN
+{
+  "status": "UP",
+  "service": "credential-service",
+  "instance": "3f2a9c1b7d4e",
+  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "load": { "active": 3, "max": 20, "utilization": 0.15 }
+}
+```
+`load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
+1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
+threshold.
+
+**Service Discovery and replicas (Lab 3)**
+
+Every replica registers on startup:
+```json
+// POST {SERVICE_DISCOVERY_URL}/register
+{
+  "service_name": "credential-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8082,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+```
+`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
+exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
+instance removes itself (`DELETE /services/credential-service/{instance_id}`) once it is DOWN and on
+shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
+failed (`?reason=reported DOWN: database`), and Service Discovery passes that on in its alert.
+
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
+round-robin is visible from the client: two requests in a row to `/credentials` show two different ids.
+
+The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
+them, so nothing depends on which replica a request or an event reaches. `credential-service:9090`
+resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+`grpc_port`).
+
+**Shift check and circuit breaker (Lab 3)**
+
+Credential Service's one synchronous call is the shift check above - `GetSessionStatus` over gRPC.
+`SESSION_DIRECTORY: grpc` in the Compose file turns it on; everything else the service learns from its
+peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
+
+- **Which instance** - the healthy Session instances Service Discovery lists, in turn (round-robin).
+  While Discovery does not list the Session Service at all, the call goes to
+  `server-moderation-session-service:9090`. When Discovery knows it but has no healthy instance,
+  none is called.
+- **A failure** - an error status, or no answer within `SESSION_TIMEOUT` (2 s); `NOT_FOUND` is an
+  answer, not a failure. The next instance is asked straight away: the check only reads.
+- **Tripping** - 3 failures of one instance within `REQUEST_TIMEOUT` x 3.5 (17.5 s) trip its breaker:
+  the trip is logged at ERROR, and the instance is removed from Service Discovery with
+  `DELETE /services/server-moderation-session-service/{instance_id}?reason=circuit breaker of credential-service tripped (3 failed calls within 17500 ms)`,
+  so the Gateway and every other caller stop using it and Discovery alerts the developers. This
+  replica then leaves it alone for 17.5 s; after that the first success closes the breaker and the
+  first failure trips it again.
+- **No instance answering** - `503 SESSION_SERVICE_UNAVAILABLE`.
+
+Every replica keeps its own breakers, and every Session instance has its own, so one broken
+Session replica does not cut the service off from the healthy one.
+
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:2.1.1`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:3.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
    - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
-   - `SESSION_DIRECTORY`, `MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS` — optional; the defaults mock Server Moderation Session Service
+   - `SESSION_DIRECTORY` — `grpc` checks shifts with Server Moderation Session Service, as the team's Compose file does; `mock`, the default, answers in its place for running the service alone (`MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS`)
+   - `SESSION_SERVICE_NAME` (default `server-moderation-session-service`), `SESSION_GRPC_ADDRESS` (default `server-moderation-session-service:9090`), `SESSION_TIMEOUT` (default `2s`) — optional; where the Session Service is found and how long one instance gets to answer
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
+   - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
+   - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
 
-**DockerHub:** `kutulin/pad-17-credential-service:2.1.1` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:3.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
-**Mocked until the other services exist:** the shift lookup behind `404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` belongs to Server Moderation Session Service. Until it runs, a mock treats every session as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running), which the Postman collection uses to demonstrate both paths.
+**Running it without Server Moderation Session Service:** with `SESSION_DIRECTORY=mock` (the service's own default) a mock answers the shift check: every session counts as running except `00000000-0000-0000-0000-000000000404` (not found) and `00000000-0000-0000-0000-0000000e0d0d` (not running). The team's Compose file uses `grpc`, so the Postman collection opens a real shift first.
 
 **Source code / build details:** private repo `pad-team-17-credential-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -957,12 +1373,34 @@ The following two error responses apply to both `GET /rules` and `PUT /rules`:
 { "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
 ```
  
+ ### Health, discovery and observability
+
+ `GET /health` checks the database and reports the service name, instance
+ hostname, database status, and REST/gRPC load. It returns `200` when the
+ service is healthy and `503` when the database check fails.
+
+ Each instance registers both its REST and gRPC endpoints with Service Discovery
+ at startup, retries registration when Discovery is temporarily unavailable,
+ refreshes the registration through heartbeats, and deregisters during graceful
+ shutdown. Requests, gRPC evaluations, health failures, and discovery lifecycle
+ events are logged with request IDs and durations.
+
+ The shared Compose deployment uses:
+
+ ```properties
+ SERVICE_DISCOVERY_URL=http://discovery-service:8000
+ SERVICE_NAME=server-rules-service
+ SERVICE_HTTP_PORT=8080
+ SERVICE_GRPC_PORT=9090
+ SERVICE_HEARTBEAT_SECONDS=15
+ ```
+
  ### Timeout and concurrency limit
 
 - **Task timeout: 5 seconds.** Both REST handlers return a `Callable`, so a slower request is answered with `504 REQUEST_TIMEOUT` (`spring.mvc.async.request-timeout=5000`).
 - **Concurrent task limit: 20 requests in flight.** The 21st gets `429 TOO_MANY_REQUESTS` immediately. `ConcurrencyLimitFilter` holds a slot until the async request completes.
 
-These limits cover the REST API only, not the gRPC `EvaluateApplicant` endpoint.
+These limits cover the REST API and the gRPC `EvaluateApplicant` endpoint.
 
 ### Rule condition format
 
@@ -995,21 +1433,80 @@ No events published or consumed — Server Rules Service doesn't participate in 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.2.0`
+1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
-**Ports:** gRPC on `9091` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
+**Ports:** REST and gRPC use ports `8080` and `9090` inside the Compose
+network. Neither port is published directly in the shared stack; client
+requests go through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/server-rules-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/server-rules-service:v0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
 ---
 
 ### University Record Service
+
+Lab 3 – Scaling Up. Multiple instances can run behind the Gateway. Each
+instance exposes `GET /health`, writes structured logs, registers with Service
+Discovery on startup, refreshes its registration through heartbeats, and
+removes failing Session Service instances after the circuit-breaker threshold.
+
+### Health and logging
+
+`GET /health` is used by Service Discovery and the Gateway. It returns `200`
+when the database is available and `503` when the database is unavailable. The
+response includes the instance hostname, database and RabbitMQ checks, and
+REST/gRPC load:
+
+```json
+{
+  "status": "UP",
+  "service": "university-record-service",
+  "instance": "container-id",
+  "checks": { "database": "up", "rabbitmq": "up" },
+  "load": {
+    "rest": { "active": 0, "max": 20 },
+    "grpc": { "active": 0, "max": 20 },
+    "utilization": 0.0
+  }
+}
+```
+
+Only the database determines the overall health status. A RabbitMQ failure is
+reported and logged, but does not by itself change the service status to
+`DOWN`. The service logs request start/completion, status, duration, business
+events, RabbitMQ processing, gRPC calls, upstream Session Service failures,
+instance removals, discovery registration, and concurrency-limit rejections.
+Requests preserve an incoming `X-Request-Id` or generate one and include it in
+the response and correlated log entries.
+
+### Service Discovery registration
+
+At startup, each instance sends `POST /register` to Service Discovery with its
+service name, container `HOSTNAME` instance ID, resolved host address, internal
+HTTP port, internal gRPC port, and `/health` path. Registration retries with
+backoff if Discovery is unavailable and repeats every 15 seconds by default as
+a heartbeat. During graceful shutdown, the instance deregisters with
+`DELETE /services/{serviceName}/{instanceId}`. A crashed instance stops sending
+heartbeats and must be removed by Service Discovery's health checks.
+
+The shared Compose configuration uses:
+
+```properties
+SERVICE_DISCOVERY_URL=http://discovery-service:8000
+SERVICE_NAME=university-record-service
+SERVICE_HTTP_PORT=8080
+SERVICE_GRPC_PORT=9090
+SERVICE_HEARTBEAT_SECONDS=15
+```
+
+Replicas share PostgreSQL and RabbitMQ, use the container `HOSTNAME` as their
+unique identity, and must not publish a fixed host port.
 
 **Client-facing REST (via API Gateway)**
 
@@ -1122,18 +1619,30 @@ Not yet consuming `decision_made`, so `previously_banned` isn't updated when a M
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.2.0`
+1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.3.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
    - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
 
-**Ports:** gRPC on `9092` (host). REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`).
+**Ports:** gRPC uses port `9090` inside the container. The shared Compose
+configuration does not publish a fixed host port for scaled instances; client
+requests go through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/university-record-service:v0.2.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/university-record-service:v0.3.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
+To run multiple instances in the shared Compose deployment, scale by service
+name. Do not publish fixed host ports for these services; replicas communicate
+over the Compose network:
+
+```bash
+docker compose up -d \
+  --scale server-rules-service=2 \
+  --scale university-record-service=2
+```
 
 ---
 
@@ -1149,125 +1658,53 @@ The consumer listens on queue `player-service.shift_ended`, bound to the shared 
 
 #### Requirements
 
-To run the service locally, the following software is required:
+The service is built with TypeScript, NestJS, TypeORM, PostgreSQL, gRPC, and RabbitMQ. For
+standalone development use Node.js 24+, npm and PostgreSQL 16+; the shared CPR deployment uses
+published Docker images instead of building from each private source repository.
 
-- Node.js 24+
-- npm
-- PostgreSQL 16+
-
-Alternatively, Docker can be used to run both the service and its PostgreSQL database:
-
-- Docker
-- Docker Compose
-
-The service uses the following main technologies:
-
-- TypeScript
-- NestJS
-- TypeORM
-- PostgreSQL
-- gRPC for future synchronous service-to-service communication
-- RabbitMQ for future asynchronous event publishing
-
-Create a `.env` file based on `.env.example`:
-
-```env
-PORT=3000
-
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=moderation
-DB_PASSWORD=change_me
-DB_DATABASE=moderation
-```
-
-Use the actual values defined in `.env.example` if they differ from the example above.
-
-For local development, install the dependencies and start the service:
-
-```bash
-npm install
-npm run start:dev
-```
-
-When running locally, the Moderation Service is available at:
-
-```text
-http://localhost:3000
-```
-
+For local source development, see `services/moderation-service/README.md`. In the CPR deployment,
+`DB_HOST=moderation-db`, `DB_NAME=moderation`, `SERVICE_DISCOVERY_URL=http://discovery-service:8000`,
+and `SERVICE_HEARTBEAT_SECONDS=15` are supplied by `docker-compose.yml`.
 
 #### Running with Docker
 
-The service and its PostgreSQL database can be started using Docker Compose:
-
 ```bash
-docker compose up -d
+docker compose pull moderation-service
+docker compose up -d moderation-service
+docker compose ps moderation-service
 ```
 
-The Moderation Service runs on port `3000` inside its container and is exposed on the host at:
-
-```text
-http://localhost:8085
-```
-
-The deployment also starts the PostgreSQL database used by the Moderation Service.
-
-The published Docker image is:
-
-```text
-dannacojocari/moderation-service:0.2.0
-```
-
-The image supports:
-
-```text
-linux/amd64
-linux/arm64
-```
-
-PostgreSQL data is stored in a persistent Docker volume.
-
-To check the containers:
-
-```bash
-docker compose ps
-```
-
-To stop the service:
-
-```bash
-docker compose down
-```
+- **Image:** `dannacojocari/moderation-service:v0.4.0` (also published as `latest`).
+- **Replicas:** 2, running on internal port `3000`.
+- **Access:** authenticated REST requests go through the Gateway at `http://localhost:8090`.
+  The CPR Compose deployment does **not** publish Moderation directly on host port `8085`.
+- **Persistence:** both instances use `moderation-db` and its named PostgreSQL volume.
+- **Discovery:** both instances register and renew their registrations every 15 seconds.
 
 #### Communication
 
-The Moderation Service uses different communication mechanisms depending on the operation.
+**REST:** clients submit and manage decisions via the Gateway, which validates bearer tokens and
+passes the trusted player identity to downstream services.
 
-**REST**
+**gRPC:** Moderation gathers applicant details from Applicant, Credential and University Record,
+then asks Server Rules to evaluate the result. The deployed service supports real gRPC clients.
+Its optional discovery-backed router (`GRPC_DISCOVERY_ENABLED=true`) selects healthy instances,
+tracks failures per instance, and applies circuit breakers; with the flag left unset in CPR,
+the configured static addresses remain in use:
 
-REST is used by clients to submit and manage moderation decisions.
+```text
+APPLICANT_GRPC_URL=applicant-service:9090
+CREDENTIAL_GRPC_URL=credential-service:9090
+UNIVERSITY_RECORD_GRPC_URL=university-record-service:9090
+SERVER_RULES_GRPC_URL=server-rules-service:9090
+```
 
-**gRPC**
+Only enable discovery-backed gRPC after all four destinations have healthy entries with
+`grpc_port` in `GET /services/{service_name}`. A gRPC business error is not the same as an
+infrastructure outage and should not trip a circuit breaker.
 
-gRPC is the planned synchronous service-to-service communication mechanism.
-
-The Moderation Service requires information from:
-
-- Applicant Service
-- Credential Service
-- University Record Service
-- Server Rules Service
-
-For Lab 1, these dependencies are represented by mock implementations behind service interfaces. The mocks can later be replaced by gRPC clients without changing the moderation decision logic.
-
-**RabbitMQ**
-
-RabbitMQ is the planned asynchronous communication mechanism for publishing moderation results.
-
-After a new decision is successfully persisted, the Moderation Service publishes a `decision_made` event.
-
-For Lab 1, the RabbitMQ publisher is represented by a mock implementation. The same publisher abstraction can later be backed by RabbitMQ.
+**RabbitMQ:** Moderation publishes `decision_made` after persisting the decision, allowing the
+Session Service to advance the shift without a synchronous callback.
 
 #### Decisions REST API
 
@@ -1471,7 +1908,7 @@ accept | reject | flag | ban
 
 The Server Rules Service determines the expected verdict and violated rules. It does not fetch the applicant data itself.
 
-For Lab 1, all four gRPC dependencies are represented by mock implementations.
+The Lab 3 deployment uses real gRPC integrations. The service also retains test doubles for isolated unit tests.
 
 #### RabbitMQ Events
 
@@ -1491,7 +1928,7 @@ A `decision_made` event is published after a new moderation decision has been su
 
 The event allows other services, particularly the Server Moderation Session Service, to react to the result of a moderation decision without creating a synchronous dependency on the Moderation Service.
 
-For Lab 1, event publishing is represented by a mock publisher. RabbitMQ integration will replace this mock during service integration.
+In the integrated deployment the event is published through RabbitMQ; isolated tests may use mock publishers.
 
 #### Persistence
 
@@ -1510,45 +1947,23 @@ No other microservice directly accesses the Moderation Service database.
 
 #### Postman Collection
 
-The REST API can be tested using:
+The CPR collection is
+[`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json).
+It starts with Gateway-based player registration/login, then exercises decision creation, listing,
+lookup, modification, validation errors, duplicates, deletion, and missing-resource handling.
+It captures `decision_id` from the create response and uses `base_url=http://localhost:8090`.
 
-```text
-postman/pad-team-17-pair4-moderation.postman_collection.json
-```
+#### Lab 3 integration notes
 
-The collection uses variables for:
-
-- `base_url`
-- `session_id`
-- `applicant_id`
-- `decision_id`
-
-The `decision_id` variable is automatically populated after a decision is successfully created.
-
-The collection covers:
-
-- Creating a moderation decision
-- Retrieving all decisions
-- Retrieving a decision by ID
-- Updating a decision and verifying recalculation
-- Rejecting an invalid verdict
-- Rejecting modifications to protected fields
-- Rejecting duplicate decisions
-- Retrieving a nonexistent decision
-- Deleting a decision
-- Verifying that a deleted decision returns `404`
-
-Run the requests in their numbered order for the complete workflow.
-
-#### Current Lab 1 Limitations
-
-The external service dependencies are currently represented by mocks rather than real gRPC clients.
-
-The `decision_made` publisher is currently a mock rather than a RabbitMQ publisher.
-
-Moderator identity is also mocked for Lab 1. Once authentication is integrated, the moderator identity should be obtained from the authenticated JWT rather than from a development/mock identity.
-
-The service interfaces and publisher abstraction are intentionally separated from the decision logic so these mocks can later be replaced by the real infrastructure integrations.
+- The Docker image is `v0.4.0` and runs as **two replicas** with periodic Service Discovery
+  registration and automatic recovery after Discovery restarts.
+- The discovery-backed gRPC router and per-instance circuit breakers are implemented and tested
+  in the service, but are **opt-in** (`GRPC_DISCOVERY_ENABLED=true`) and are **not enabled in the
+  supplied CPR Compose configuration**.
+- If you enable this routing mode, first verify registration of Applicant, Credential,
+  University Record and Server Rules, including each instance's `grpc_port`.
+- Static gRPC URLs still exist for the default configuration and as the service's fallback mode.
+- The integration tests for dynamic routing/failover are distinct from the Postman REST collection.
 
 ---
 
@@ -1562,91 +1977,36 @@ The service transports messages between players but does not determine whether t
 
 #### Requirements
 
-To run the service locally, the following software is required:
-
-- Node.js 24+
-- npm
-- PostgreSQL 16+
-
-Alternatively, Docker can be used to run both the service and its PostgreSQL database:
-
-- Docker
-- Docker Compose
-
-The service uses the following main technologies:
-
-- TypeScript
-- NestJS
-- TypeORM
-- PostgreSQL
-- Socket.IO
-
-Create a `.env` file based on `.env.example`:
-
-```env
-PORT=3000
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=discord_dms
-DB_PASSWORD=change_me
-DB_DATABASE=discord_dms
-```
-
-For local development, install the dependencies and start the service:
-
-```bash
-npm install
-npm run start:dev
-```
-
-When running locally, the Discord DMs Service is available at:
-
-```text
-http://localhost:3000
-```
+The service uses TypeScript, NestJS, TypeORM, PostgreSQL and Socket.IO; in the replicated CPR
+deployment it also uses a Redis Socket.IO adapter. Local development requires Node.js 24+, npm
+and PostgreSQL 16+. For source-level setup, see `services/discord-dms-service/README.md`.
 
 #### Running with Docker
 
-The recommended way to run the complete service is with Docker Compose:
-
 ```bash
-docker compose up -d
+docker compose pull discord-dms-service
+docker compose up -d redis discord-dms-service discord-proxy
+docker compose ps discord-dms-service redis discord-proxy
 ```
 
-The Discord DMs Service runs on port `3000` inside its container and is exposed on the host at:
+- **Image:** `dannacojocari/discord-dms-service:v0.4.0` (also published as `latest`).
+- **Replicas:** 2, each listening on internal HTTP port `3000` and gRPC port `9090`.
+- **PostgreSQL:** both replicas share `discord-dms-db` and its persistent volume.
+- **Redis:** `REDIS_URL=redis://redis:6379`; both replicas connect to the adapter on startup.
+- **Discovery:** `SERVICE_DISCOVERY_URL=http://discovery-service:8000`, heartbeat every 15 seconds.
+- **Public access:** Traefik (`discord-proxy`, `traefik:v3.6.16`) publishes host port `8086` and
+  balances incoming requests. The Discord service itself has no fixed `container_name` or host
+  `ports` declaration, allowing Compose to start two instances.
 
-```text
-http://localhost:8086
-```
+Gateway REST endpoints remain on `http://localhost:8090`. The Gateway's
+`DISCORD_DMS_PUBLIC_URL=http://localhost:8086` tells clients where to establish their persistent
+Socket.IO connections after successful authorization/negotiation.
 
-The deployment also starts the PostgreSQL database used by the Discord DMs Service.
-
-The published Docker image is:
-
-```text
-dannacojocari/discord-dms-service:0.3.0
-```
-
-The image supports:
-
-```text
-linux/amd64
-linux/arm64
-```
-
-PostgreSQL data is stored in a persistent Docker volume.
-
-To check the containers:
-
-```bash
-docker compose ps
-```
-
-To stop the service:
-
-```bash
-docker compose down
-```
+Traefik routes to the replicas using Docker labels. It sets the `discord_route` sticky cookie so
+requests belonging to one Socket.IO HTTP-polling session reach the same replica. Redis Pub/Sub
+then propagates room messages across replicas; the shared PostgreSQL database stores channels
+and message history. Sticky routing and Redis serve **different** purposes and both are needed
+for this deployment.
 
 #### Communication
 
@@ -1654,7 +2014,7 @@ The Discord DMs Service uses different communication mechanisms depending on the
 
 **REST**
 
-REST is used for channel and message management and for triggering session channel provisioning during Lab 1.
+REST is used for channel and message management and for provisioning session channels via the Gateway.
 
 **WebSocket / Socket.IO**
 
@@ -1674,9 +2034,7 @@ Supported server events:
 
 The Discord DMs Service depends on session and player-assignment information to determine which players should have access to each communication channel.
 
-The integration is represented by a `SessionClient` abstraction. For Lab 1, the real Session Service gRPC integration is not yet available, so the service uses `MockSessionClient`.
-
-The mocked Session Service returns:
+The Session Service can call Discord DMs over the deployed gRPC interface (`DiscordDmsService.ProvisionChannels`, port `9090`). The application also has a `SessionClient` abstraction used by the REST provisioning workflow and isolated tests. Provisioning receives:
 
 - `session_id`
 - players belonging to the session
@@ -1692,7 +2050,7 @@ schedule
 messages
 ```
 
-The Lab 1 implementation maps these scopes to Discord channels:
+These scopes map to Discord channels:
 
 ```text
 enrollment -> enrollment-check
@@ -1703,13 +2061,13 @@ messages   -> general-mod-chat
 
 Channel membership is generated from the scopes assigned to each player.
 
-The mock is isolated behind the `SessionClient` interface so that it can later be replaced by a real gRPC implementation without changing the channel provisioning logic.
+The channel provisioning logic is independent of whether session information originates in a test client or the real Session Service. The deployed gRPC server is reachable internally, not through the public Traefik HTTP port.
 
 **RabbitMQ**
 
 The current Discord DMs Service does not publish or consume RabbitMQ events.
 
-Real-time player messages are transported directly through Socket.IO and persisted in PostgreSQL. The service does not determine whether message contents are correct and currently has no asynchronous domain events that require RabbitMQ.
+Real-time player messages are transported through Socket.IO, distributed between replicas via Redis, and persisted in PostgreSQL. Redis Pub/Sub is transport coordination rather than a domain-event replacement for RabbitMQ. Discord DMs does not currently publish or consume RabbitMQ domain events.
 
 #### Channels REST API
 
@@ -1882,32 +2240,128 @@ No other microservice directly accesses the Discord DMs database.
 
 #### Postman Collection
 
-The REST API can be tested using:
+The CPR collection is
+[`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
+It includes Gateway-based setup for a Moderator and Junior Moderator, REST channel/message
+operations, Gateway WebSocket negotiation (`GET /ws/discord-dms`), and preparation of a
+shared channel for Socket.IO testing.
 
-```text
-postman/pad-team-17-pair4-discord-dms.postman_collection.json
+Postman's legacy HTTP collection format does not encode live Socket.IO sessions. Create two
+Socket.IO requests in Postman using the `socketio_url` saved during negotiation; use
+`socket_channel_id`, `player_id`, and `junior_player_id` from the setup requests. Each socket
+emits `join_channel`; one emits `send_message` and the other listens for `message`.
+
+For a **cross-replica** test, connect the two sockets using distinct Traefik sticky cookies
+obtained from `/health` requests that identify different replica instances. Verify that the
+second client receives the first client's message. This end-to-end test is **still pending**;
+HTTP balancing, sticky routing and Redis connections have already been checked separately.
+
+#### Lab 3 integration notes
+
+- `docker compose ps discord-dms-service` should show **two** application instances.
+- `GET /services/discord-dms-service` in Discovery should return two distinct, healthy instances.
+- `docker compose exec -T redis redis-cli ping` should return `PONG`.
+- Both application replicas should log `Redis adapter connected` and periodic registrations.
+- `curl -i http://localhost:8086/health` should return `200`, an `instance` field, and the
+  `discord_route` sticky-session cookie. Reusing the same cookie should consistently hit one
+  instance; fresh requests can be balanced across both.
+- Traefik `v3.4` could not discover containers with the Docker Engine 29.0.1 used during local
+  verification. The working deployment uses **Traefik `v3.6.16`** instead.
+
+### Service Discovery
+
+Lab 3. Every service instance registers here; the Gateway and the services that call each other
+look instances up here; and every instance's health is watched from here. The source is
+`services/discovery-service` (Python, FastAPI) - its README has the details.
+
+The services register as `player-service`, `server-moderation-session-service`, `applicant-service`,
+`credential-service`, `university-record-service`, `server-rules-service`, `moderation-service` and
+`discord-dms-service`.
+
+**Registration - every service, on startup, and again as a heartbeat**
+```json
+// POST /register
+{
+  "service_name": "applicant-service",
+  "instance_id": "3f2a9c1b7d4e",
+  "host": "172.18.0.7",
+  "port": 8081,
+  "scheme": "http",
+  "health_path": "/health",
+  "grpc_port": 9090
+}
+
+// Response 200 - "registered" for a new instance, "updated" for a heartbeat
+{ "action": "registered", "instance": { "...": "as sent", "registered_at": "RFC3339", "healthy": false } }
+```
+`instance_id` is the container's hostname and `host` its address, so callers reach that exact
+replica; `grpc_port` is optional. A new instance starts with `healthy: false` and gets traffic once
+the first health check finds it UP, within 5 seconds. An instance that keeps renewing its
+registration comes back by itself after Service Discovery restarts, or after a caller's circuit
+breaker removed it.
+
+**Lookup**
+
+`GET /services/{service_name}` - every instance of the service, each with its `healthy` flag;
+callers only use the healthy ones. `404 SERVICE_NOT_FOUND` if none ever registered.
+`GET /services` lists every service.
+
+**Removal**
+
+`DELETE /services/{service_name}/{instance_id}?reason={why}` - sent by the instance itself, or by a
+caller whose circuit breaker gave up on it; `reason` is optional. An instance leaving without a reason
+(a shutdown) is only logged. Every other removal is an alert that says who asked and why, e.g.
+`REMOVED instance: service=server-moderation-session-service instance=5c0d2e9a71b4 address=172.18.0.11:3001 requested_by=172.18.0.7 reason=circuit breaker of applicant-service tripped (3 failed calls within 17500 ms)`.
+
+**Health checks and alerts**
+
+Every 5 seconds Service Discovery calls every instance's `health_path`. Every service answers with
+its state and its load:
+```json
+{ "status": "UP", "load": { "utilization": 0.9 } }
+```
+- `200` with `"status": "UP"` makes the instance healthy. Any other answer makes it unhealthy - it
+  stays registered, and gets traffic again once it reports UP. No answer 6 checks in a row removes
+  it: its container is gone.
+- A repeated registration (the heartbeat) keeps the health the last check found, unless the
+  instance's address changed; it never makes an instance healthy by itself.
+- Every change of state is an alert, and so is a `load.utilization` at or above
+  `CRITICAL_LOAD_THRESHOLD` (`0.8`). Alerts are logged, and posted to the developers' Telegram group
+  by the team's bot when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set in `.env` (the bot comes
+  from @BotFather; the group's id is in the bot's `getUpdates` once it is in the group - the steps
+  are in Service Discovery's README). The token is a secret: `.env` only, never git.
+
+**Running it:** image `dannacojocari/pad-team-17-discovery-service:0.1.0` (`DISCOVERY_IMAGE`),
+listening on `8000` inside the Compose network only. `GET /health` reports its own state: whether
+its health monitor runs, and how many services and instances it holds. A release is a `v*.*.*` Git
+tag on its `main`; the image carries the same version without the `v`.
+
+## Source submodules and Docker images
+
+The service directories under `services/` are **Git submodules**. CPR records the exact commit
+for each dependency; it does not vendor its contents. To inspect a service's source, run:
+
+```bash
+git submodule update --init services/moderation-service services/discord-dms-service services/discovery-service
 ```
 
-The collection contains requests for:
+To change the pinned versions, use a CPR feature branch, fetch each submodule's `main`, check
+out the intended commit, then stage and commit the three changed gitlinks in CPR. Review them
+with `git diff --submodule=log`. This is independent of Docker publishing.
 
-- Channel CRUD
-- Session channel lookup
-- Session channel provisioning
-- Message CRUD
+The Pair 4 source repositories are:
 
-The `Provision Session Channels` request verifies that the mocked Session Service information produces the expected channels.
+- [`DannaCojocari/moderation-service`](https://github.com/DannaCojocari/moderation-service)
+- [`DannaCojocari/discord-dms-service`](https://github.com/DannaCojocari/discord-dms-service)
+- [`DannaCojocari/pad-team-17-discovery-service`](https://github.com/DannaCojocari/pad-team-17-discovery-service)
 
-#### Current Lab 1 Limitations
+A new `main` commit in a source repository does not automatically change the CPR submodule pointer.
+Similarly, updating the gitlink does not automatically pull its published Docker image. To get
+republished Pair 4 images locally, use `docker compose pull moderation-service discord-dms-service`
+and recreate the services. Discovery uses the separate `DISCOVERY_IMAGE` variable. Keep the
+revisions and image contents aligned when preparing a team release.
 
-Authentication between the client and Discord DMs is not yet integrated. For Lab 1, player identity is supplied in the WebSocket payload.
-
-JWT authentication should later provide the authenticated player identity instead of trusting `player_id` or `sender_id` supplied by the client.
-
-The Session Service integration currently uses `MockSessionClient`. The mock provides session players, roles, and scopes so that channel provisioning can be implemented and tested independently while the real Session Service integration is unavailable.
-
-The mock will later be replaced by a gRPC client implementing the same `SessionClient` abstraction.
-
-The current scope-to-channel mapping is part of the Lab 1 implementation and can be revised when the final inter-service contract and channel configuration rules are integrated.
+---
 
 ## GitHub Workflow
 

@@ -1,417 +1,82 @@
 {
   "info": {
     "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
-    "name": "Discord DMs Service - Gateway + Socket.IO",
-    "description": "Postman collection for Team 17 Discord DMs Service, updated for Lab 2.\n\nREST:\n- Every client REST request goes through the API Gateway at http://localhost:8090.\n- Bearer JWTs are obtained through Player Service via the Gateway.\n- Existing intentional error tests are preserved.\n\nWebSocket / Socket.IO:\n- The client first negotiates through GET /ws/discord-dms on the Gateway.\n- The Gateway validates the JWT and returns the public Discord DMs URL.\n- The client then connects directly to Discord DMs, so the Gateway is not in the persistent socket path.\n\nIMPORTANT:\nThis file uses the legacy Postman Collection v2.1 JSON format, which represents HTTP requests. Postman's Socket.IO request type is stored separately from normal HTTP v2.1 collection requests. The collection therefore contains the complete HTTP setup/negotiation flow plus a self-contained channel preparation step. After running the Socket.IO Preparation folder, create two Socket.IO requests in Postman using the saved socketio_url and the event payloads documented in that folder.\n\nRun order:\n0. Setup - creates/logs in moderator and junior through Gateway.\n1. Gateway WebSocket Negotiation - tests 401 errors and successful negotiation.\n2. Channels / 3. Messages - existing REST tests.\n4. Socket.IO Preparation - creates a channel containing both test players.\n5. Gateway authorization checks - intentional 401 errors.\n\nSocket.IO events:\nModerator join_channel:\n{ \"channel_id\": \"{{socket_channel_id}}\", \"player_id\": \"{{player_id}}\" }\n\nJunior join_channel:\n{ \"channel_id\": \"{{socket_channel_id}}\", \"player_id\": \"{{junior_player_id}}\" }\n\nModerator send_message:\n{ \"channel_id\": \"{{socket_channel_id}}\", \"sender_id\": \"{{player_id}}\", \"content\": \"Hello from moderator through Socket.IO\" }\n\nListen for server event: message\n",
+    "name": "Discord DMs — Lab 3",
+    "description": "# Discord DMs — Lab 3 Postman collection\n\nContains the original HTTP API examples plus read-only checks for Health and Service Discovery, including two-replica validation and recovery after a Discovery restart.\n\n**API URL:** Set `base_url` to a directly reachable instance (default `http://localhost:3000` for standalone development). The CPR Compose deployment does not publish Moderation HTTP ports, and the future two-replica Discord deployment should not publish a fixed `8086:3000` port. For end-to-end API requests use a Gateway URL only when that Gateway exposes the relevant endpoint and configure any required authentication.\n\n**Discovery URL:** `discovery_url` defaults to `http://localhost:18000`. Discovery is only reachable inside the CPR Docker network unless you publish/forward its port; do not expose it publicly.\n\n**Real data:** Set the IDs from a real created shift/session and its applicant/player before running the functional API workflow. An arbitrary UUID is not proof of an existing record.\n\n**Replica checks:** Run `Lab 3 - Service Discovery / 3. Verify Registered Replicas` only after deployment and health checks; `expected_replicas` defaults to 2. To test restart recovery, run `4. Capture IDs Before Discovery Restart`, restart only Discovery in Docker, allow the heartbeat interval (15s) and health monitor to complete, then run `5. Verify IDs After Discovery Restart`. The collection does not restart containers or attempt to re-register instances itself.\n\n**Important:** Discovery API checks verify service registration and health, *not* complete HTTP load balancing, gRPC circuit-breaking, or Socket.IO Redis cross-replica fan-out.\n\nThe pre-existing `Provision Session Channels` request documents an old mocked-Session flow; check whether that endpoint uses a real Session Service in the currently deployed version.\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8090"
+      "value": "http://localhost:3000",
+      "description": "Direct service HTTP URL in standalone mode; use reachable proxy/Gateway for deployed API routes."
     },
     {
       "key": "session_id",
-      "value": "750e8400-e29b-41d4-a716-446655440000"
+      "value": "",
+      "description": "Set to a REAL session UUID from Session service, not an illustrative UUID."
     },
     {
       "key": "player_id",
-      "value": "550e8400-e29b-41d4-a716-446655440001"
+      "value": "",
+      "description": "Set to a REAL player UUID (required by create channel/message examples)."
     },
     {
       "key": "channel_id",
-      "value": ""
+      "value": "",
+      "description": "Set automatically after successful Create Channel."
     },
     {
       "key": "message_id",
-      "value": ""
+      "value": "",
+      "description": "Set automatically after successful Create Message."
     },
     {
-      "key": "run_id",
-      "value": ""
+      "key": "discovery_url",
+      "value": "http://localhost:18000",
+      "type": "string",
+      "description": "Host-local Discovery URL, forwarded from CPR container; not published by default."
     },
     {
-      "key": "username",
-      "value": ""
+      "key": "expected_replicas",
+      "value": "2",
+      "type": "string",
+      "description": "Expected healthy replicas in CPR; set to 1 for a standalone service."
     },
     {
-      "key": "email",
-      "value": ""
+      "key": "baseline_instance_ids",
+      "value": "",
+      "type": "string",
+      "description": "Internal snapshot saved by the baseline request; used to verify recovery."
     },
     {
-      "key": "password",
-      "value": "secret123"
+      "key": "instance_1_id",
+      "value": "",
+      "type": "string",
+      "description": "Set from first registered instance in the Discovery replica check."
     },
     {
-      "key": "token",
-      "value": ""
+      "key": "instance_2_id",
+      "value": "",
+      "type": "string",
+      "description": "Set from second registered instance in the Discovery replica check."
     },
     {
-      "key": "junior_player_id",
-      "value": ""
+      "key": "instance_1_host",
+      "value": "",
+      "type": "string",
+      "description": "Set from first registered instance in the Discovery replica check."
     },
     {
-      "key": "junior_token",
-      "value": ""
-    },
-    {
-      "key": "junior_email",
-      "value": ""
-    },
-    {
-      "key": "junior_username",
-      "value": ""
-    },
-    {
-      "key": "socket_url",
-      "value": ""
-    },
-    {
-      "key": "socketio_url",
-      "value": ""
-    },
-    {
-      "key": "socket_session_id",
-      "value": ""
-    },
-    {
-      "key": "socket_channel_id",
-      "value": ""
+      "key": "instance_2_host",
+      "value": "",
+      "type": "string",
+      "description": "Set from second registered instance in the Discovery replica check."
     }
   ],
   "item": [
     {
-      "name": "0. Setup - Player authentication through Gateway",
-      "description": "Creates two temporary players through the Gateway: one moderator client and one junior client. Stores both IDs and JWTs.",
-      "item": [
-        {
-          "name": "Register moderator through Gateway",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const run = Date.now();",
-                  "pm.collectionVariables.set('run_id', String(run));",
-                  "pm.collectionVariables.set('username', `dmmoderator${run}`);",
-                  "pm.collectionVariables.set('email', `dmmoderator${run}@example.com`);",
-                  "pm.collectionVariables.set('junior_username', `dmjunior${run}`);",
-                  "pm.collectionVariables.set('junior_email', `dmjunior${run}@example.com`);"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
-                  "const body = pm.response.json();",
-                  "pm.test('Response has player_id', () => pm.expect(body).to.have.property('player_id'));",
-                  "pm.collectionVariables.set('player_id', body.player_id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Login moderator through Gateway",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
-                  "const body = pm.response.json();",
-                  "pm.test('Response has token', () => pm.expect(body).to.have.property('token'));",
-                  "pm.collectionVariables.set('token', body.token);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players/login",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players",
-                "login"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Register junior through Gateway",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
-                  "const body = pm.response.json();",
-                  "pm.test('Response has player_id', () => pm.expect(body).to.have.property('player_id'));",
-                  "pm.collectionVariables.set('junior_player_id', body.player_id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"username\": \"{{junior_username}}\",\n  \"email\": \"{{junior_email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Login junior through Gateway",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
-                  "const body = pm.response.json();",
-                  "pm.test('Response has token', () => pm.expect(body).to.have.property('token'));",
-                  "pm.collectionVariables.set('junior_token', body.token);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{junior_email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players/login",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players",
-                "login"
-              ]
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "1. Gateway WebSocket Negotiation",
-      "description": "Tests the Lab 2 negotiation flow. The authenticated request saves both the Gateway-returned URL and a ws:// URL suitable for Postman's Socket.IO request UI.",
-      "item": [
-        {
-          "name": "Negotiate - no token (intentional 401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 401', () => pm.response.to.have.status(401));",
-                  "pm.test('Gateway returns UNAUTHORIZED', () => pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED'));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/ws/discord-dms",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "ws",
-                "discord-dms"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Negotiate - invalid token (intentional 401)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 401', () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "not.a.valid.jwt",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/ws/discord-dms",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "ws",
-                "discord-dms"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Negotiate Discord DMs Socket.IO URL",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
-                  "const body = pm.response.json();",
-                  "pm.test('Response has url', () => pm.expect(body).to.have.property('url'));",
-                  "pm.collectionVariables.set('socket_url', body.url);",
-                  "const socketioUrl = body.url.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');",
-                  "pm.collectionVariables.set('socketio_url', socketioUrl);",
-                  "pm.test('Negotiation points to Discord DMs, not Gateway', () => {",
-                  "  pm.expect(body.url).to.not.include(':8090');",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/ws/discord-dms",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "ws",
-                "discord-dms"
-              ]
-            },
-            "description": "Authenticated negotiation through Gateway. Saves socket_url and socketio_url."
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "2. Channels",
+      "name": "Channels",
       "item": [
         {
           "name": "Create Channel",
@@ -419,10 +84,13 @@
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
+                  "pm.test('Channel created', () => pm.response.to.have.status(201));",
                   "if (pm.response.code === 201) {",
-                  "    const response = pm.response.json();",
-                  "    pm.collectionVariables.set('channel_id', response.id);",
+                  "  const response = pm.response.json();",
+                  "  if (response.id) pm.collectionVariables.set('channel_id', response.id);",
+                  "  pm.test('Created channel ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
                   "}"
                 ]
               }
@@ -448,7 +116,8 @@
               "path": [
                 "channels"
               ]
-            }
+            },
+            "description": "Requires a real session_id and player_id. A successful response stores channel_id. When testing in CPR, use a reachable service/Gateway HTTP route."
           }
         },
         {
@@ -556,7 +225,7 @@
                 "provision"
               ]
             },
-            "description": "Provisions Discord channels and memberships for a session using the Lab 1 mocked Session Service client. The operation is idempotent."
+            "description": "Legacy request carried forward from the supplied collection. That collection described this as a Lab 1 mocked Session Service provisioning flow with four fixed channels. Verify the live service implementation before considering the 4-channel assertion an integration test of real Session Service functionality."
           }
         },
         {
@@ -604,7 +273,7 @@
       ]
     },
     {
-      "name": "3. Messages",
+      "name": "Messages",
       "item": [
         {
           "name": "Create Message",
@@ -612,10 +281,13 @@
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
+                  "pm.test('Message created', () => pm.response.to.have.status(201));",
                   "if (pm.response.code === 201) {",
-                  "    const response = pm.response.json();",
-                  "    pm.collectionVariables.set('message_id', response.id);",
+                  "  const response = pm.response.json();",
+                  "  if (response.id) pm.collectionVariables.set('message_id', response.id);",
+                  "  pm.test('Created message ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
                   "}"
                 ]
               }
@@ -643,7 +315,8 @@
                 "{{channel_id}}",
                 "messages"
               ]
-            }
+            },
+            "description": "Requires an existing channel_id and real player_id. A successful response stores message_id."
           }
         },
         {
@@ -730,77 +403,53 @@
       ]
     },
     {
-      "name": "4. Socket.IO Preparation",
-      "description": "Run these requests after Setup and Negotiation.\n\nThe first request creates a dedicated channel containing BOTH generated test players and saves socket_channel_id.\n\nThen in Postman create TWO Socket.IO requests:\n\nModerator Socket\nURL: {{socketio_url}}\nEmit join_channel:\n{\n  \"channel_id\": \"{{socket_channel_id}}\",\n  \"player_id\": \"{{player_id}}\"\n}\n\nJunior Socket\nURL: {{socketio_url}}\nEmit join_channel:\n{\n  \"channel_id\": \"{{socket_channel_id}}\",\n  \"player_id\": \"{{junior_player_id}}\"\n}\n\nOn Junior Socket, listen for event: message\n\nThen on Moderator Socket emit send_message:\n{\n  \"channel_id\": \"{{socket_channel_id}}\",\n  \"sender_id\": \"{{player_id}}\",\n  \"content\": \"Hello from moderator through Socket.IO\"\n}\n\nExpected: Junior receives the server event 'message' with the persisted message object.\n",
+      "name": "Lab 3 - Service Discovery & Replicas",
+      "description": "Run after configuring discovery_url and deploying the service. These requests are read-only.",
       "item": [
         {
-          "name": "Create two-player Socket.IO test channel through Gateway",
+          "name": "1. Service HTTP Health",
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.collectionVariables.set('socket_session_id', pm.variables.replaceIn('{{$guid}}'));"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status code is 201', () => pm.response.to.have.status(201));",
-                  "const body = pm.response.json();",
-                  "pm.collectionVariables.set('socket_channel_id', body.id);",
-                  "pm.test('Both players belong to channel', () => {",
-                  "  pm.expect(body.player_ids).to.include(pm.collectionVariables.get('player_id'));",
-                  "  pm.expect(body.player_ids).to.include(pm.collectionVariables.get('junior_player_id'));",
-                  "});"
+                  "pm.test('Health HTTP status is 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('Service reports UP', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.be.an('object');",
+                  "    pm.expect(body.status).to.eql('UP');",
+                  "  });",
+                  "}"
                 ]
               }
             }
           ],
           "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"session_id\": \"{{socket_session_id}}\",\n  \"name\": \"socketio-test\",\n  \"player_ids\": [\n    \"{{player_id}}\",\n    \"{{junior_player_id}}\"\n  ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
+            "method": "GET",
+            "header": [],
             "url": {
-              "raw": "{{base_url}}/channels",
+              "raw": "{{base_url}}/health",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
-                "channels"
+                "health"
               ]
-            }
-          },
-          "response": []
+            },
+            "description": "Direct service health check; with base_url pointed at a Gateway this could check the Gateway instead. Use a direct instance URL if you need the actual service health endpoint."
+          }
         },
         {
-          "name": "Verify Socket.IO test channel through Gateway",
+          "name": "2. Discovery HTTP Health",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status code is 200', () => pm.response.to.have.status(200));",
-                  "const body = pm.response.json();",
-                  "pm.test('Correct socket channel returned', () => pm.expect(body.id).to.eql(pm.collectionVariables.get('socket_channel_id')));"
+                  "pm.test('Discovery health HTTP status is 200', () => pm.response.to.have.status(200));"
                 ]
               }
             }
@@ -809,106 +458,143 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/channels/{{socket_channel_id}}",
+              "raw": "{{discovery_url}}/health",
               "host": [
-                "{{base_url}}"
+                "{{discovery_url}}"
               ],
               "path": [
-                "channels",
-                "{{socket_channel_id}}"
-              ]
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "5. Gateway authorization checks",
-      "item": [
-        {
-          "name": "No token - 401 from Gateway",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));",
-                  "pm.test(\"Gateway returns UNAUTHORIZED\", () => pm.expect(pm.response.json().error.code).to.eql(\"UNAUTHORIZED\"));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/channels",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "channels"
+                "health"
               ]
             },
-            "description": "Intentional error: proves the Gateway rejects a protected REST request with no JWT."
-          },
-          "response": []
+            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description)."
+          }
         },
         {
-          "name": "Invalid token - 401 from Gateway",
+          "name": "3. Verify Registered Replicas",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));"
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  const instances = pm.response.json();",
+                  "  const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "  pm.test('Response is an instance array', () => pm.expect(instances).to.be.an('array'));",
+                  "  if (Array.isArray(instances)) {",
+                  "    pm.test('Expected instance count', () => pm.expect(instances.length).to.eql(expected));",
+                  "    pm.test('Instances have unique IDs and addresses', () => {",
+                  "      pm.expect(new Set(instances.map(x => x.instance_id)).size).to.eql(instances.length);",
+                  "      pm.expect(new Set(instances.map(x => x.host)).size).to.eql(instances.length);",
+                  "    });",
+                  "    pm.test('Every instance belongs to the service and is healthy', () => {",
+                  "      instances.forEach(x => { pm.expect(x.service_name).to.eql('discord-dms-service'); pm.expect(x.healthy).to.eql(true); pm.expect(x.health.status).to.eql('UP'); });",
+                  "    });",
+                  "    pm.test('Instances advertise a gRPC port', () => instances.forEach(x => pm.expect(x.grpc_port).to.be.a('number')));",
+                  "    if (instances[0]) { pm.collectionVariables.set('instance_1_id', instances[0].instance_id); pm.collectionVariables.set('instance_1_host', instances[0].host); }",
+                  "    if (instances[1]) { pm.collectionVariables.set('instance_2_id', instances[1].instance_id); pm.collectionVariables.set('instance_2_host', instances[1].host); }",
+                  "  }",
+                  "}"
                 ]
               }
             }
           ],
           "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "not.a.valid.jwt",
-                  "type": "string"
-                }
-              ]
-            },
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/channels",
+              "raw": "{{discovery_url}}/services/discord-dms-service",
               "host": [
-                "{{base_url}}"
+                "{{discovery_url}}"
               ],
               "path": [
-                "channels"
+                "services",
+                "discord-dms-service"
               ]
             },
-            "description": "Intentional error: proves the Gateway validates bearer tokens."
-          },
-          "response": []
+            "description": "Checks discord-dms-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart."
+          }
+        },
+        {
+          "name": "4. Capture IDs Before Discovery Restart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  const instances = pm.response.json();",
+                  "  const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "  pm.test('Baseline has expected number of healthy replicas', () => {",
+                  "    pm.expect(instances).to.be.an('array').with.lengthOf(expected);",
+                  "    instances.forEach(x => pm.expect(x.healthy).to.eql(true));",
+                  "  });",
+                  "  if (Array.isArray(instances) && instances.length === expected && instances.every(x => x.healthy)) {",
+                  "    pm.collectionVariables.set('baseline_instance_ids', JSON.stringify(instances.map(x => x.instance_id).sort()));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/discord-dms-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "discord-dms-service"
+              ]
+            },
+            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check."
+          }
+        },
+        {
+          "name": "5. Verify IDs After Discovery Restart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "const baselineRaw = pm.collectionVariables.get('baseline_instance_ids');",
+                  "pm.test('Baseline was captured first', () => pm.expect(baselineRaw, 'Run request 4 before restarting Discovery').to.be.a('string').and.not.empty);",
+                  "if (pm.response.code === 200 && baselineRaw) {",
+                  "  const instances = pm.response.json();",
+                  "  const originalIds = JSON.parse(baselineRaw);",
+                  "  const currentIds = instances.map(x => x.instance_id).sort();",
+                  "  pm.test('Original instances re-register after Discovery restart', () => pm.expect(currentIds).to.deep.eql(originalIds));",
+                  "  pm.test('Recovered instances are healthy', () => instances.forEach(x => { pm.expect(x.healthy).to.eql(true); pm.expect(x.health.status).to.eql('UP'); }));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/discord-dms-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "discord-dms-service"
+              ]
+            },
+            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary."
+          }
         }
       ]
     }
-  ],
-  "auth": {
-    "type": "bearer",
-    "bearer": [
-      {
-        "key": "token",
-        "value": "{{token}}",
-        "type": "string"
-      }
-    ]
-  }
+  ]
 }

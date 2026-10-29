@@ -162,20 +162,42 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.2.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.3.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
       DISCORD_DMS_PUBLIC_URL: http://localhost:8086
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
+      DISCOVERY_URL: http://discovery-service:8000
+    depends_on:
+      discovery-service:
+        condition: service_healthy
     ports:
       - "8090:8000"
 
+ # ---------------------------------------------------------------- discovery
+  discovery-service:
+    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
+    container_name: pad17-discovery-service
+    environment:
+      # Health alerts also go to the developers' Telegram group, posted by the team's bot. The bot's
+      # token is a secret: .env only.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # The share of an instance's busy request workers from which its load is critical - an alert.
+      CRITICAL_LOAD_THRESHOLD: ${CRITICAL_LOAD_THRESHOLD:-0.8}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    
+
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.2.0}
-    container_name: pad17-player-service
+    image: janetag/player-service:${PLAYER_VERSION:-0.3.0}
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -189,15 +211,19 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT: 3000
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+    deploy:
+      replicas: 2
     depends_on:
       player-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.2.0}
-    container_name: pad17-server-moderation-session-service
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.3.1}
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
@@ -212,17 +238,21 @@ services:
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
       DISCORD_DMS_GRPC_URL: discord-dms-service:9090
       PORT: 3001
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+    deploy:
+      replicas: 2
     depends_on:
       server-moderation-session-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-2.1.1}
-    container_name: pad17-applicant-service
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-3.1.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
@@ -234,15 +264,21 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8081
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
+      SESSION_DIRECTORY: grpc
+    deploy:
+      replicas: 2
     depends_on:
       applicant-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-2.1.1}
-    container_name: pad17-credential-service
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-3.1.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432
@@ -254,29 +290,41 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVER_PORT: 8082
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
+      SESSION_DIRECTORY: grpc
+    deploy:
+      replicas: 2
     depends_on:
       credential-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.2.0}
-    container_name: pad17-server-rules-service
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.3.0}
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
       DB_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
-    ports:
-      - "9091:9090"
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_NAME: server-rules-service
+      SERVICE_HTTP_PORT: 8080
+      SERVICE_GRPC_PORT: 9090
+      SERVICE_HEARTBEAT_SECONDS: 15
+    deploy:
+      replicas: 2
     depends_on:
       server-rules-db:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.2.0}
-    container_name: pad17-university-record-service
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.3.0}
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
       DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
@@ -285,21 +333,35 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-    ports:
-      - "9092:9090"
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_NAME: university-record-service
+      SERVICE_HTTP_PORT: 8080
+      SERVICE_GRPC_PORT: 9090
+      SERVICE_HEARTBEAT_SECONDS: 15
+      SESSION_CLIENT: grpc
+      SESSION_SERVICE_NAME: server-moderation-session-service
+    deploy:
+      replicas: 2
     depends_on:
       university-record-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-3.0.0}
-    container_name: pad17-moderation-service
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.4.0}
+
+    deploy:
+      replicas: 2
 
     environment:
       PORT: 3000
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_HEARTBEAT_SECONDS: 15
+      GRPC_DISCOVERY_ENABLED: "true"
 
       DB_HOST: moderation-db
       DB_PORT: 5432
@@ -322,15 +384,22 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
 
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-3.0.0}
-    container_name: pad17-discord-dms-service
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
+
+    deploy:
+      replicas: 2
 
     environment:
       PORT: 3000
       GRPC_URL: 0.0.0.0:9090
+      SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      SERVICE_HEARTBEAT_SECONDS: 15
+      REDIS_URL: redis://redis:6379
 
       DB_HOST: discord-dms-db
       DB_PORT: 5432
@@ -341,12 +410,45 @@ services:
       TASK_TIMEOUT_MS: 5000
       MAX_CONCURRENT_TASKS: 20
 
-    ports:
-      - "8086:3000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.discord.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.discord.entrypoints=discord"
+      - "traefik.http.routers.discord.service=discord"
+      - "traefik.http.services.discord.loadbalancer.server.port=3000"
+      - "traefik.http.services.discord.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.discord.loadbalancer.sticky.cookie.name=discord_route"
+      - "traefik.http.services.discord.loadbalancer.sticky.cookie.httpOnly=true"
 
     depends_on:
       discord-dms-db:
         condition: service_healthy
+      discovery-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  discord-proxy:
+    image: traefik:v3.6.16
+    container_name: pad17-discord-proxy
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.discord.address=:80"
+    ports:
+      - "8086:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - discord-dms-service
 
 volumes:
   rabbitmq-data:
