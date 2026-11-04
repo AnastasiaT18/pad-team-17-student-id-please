@@ -162,20 +162,38 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.3.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.4.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
       DISCORD_DMS_PUBLIC_URL: http://localhost:8086
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
-      DISCOVERY_URL: http://discovery-service:8000
+      BROKER_URL: http://message-broker:8000
     depends_on:
-      discovery-service:
+      message-broker:
         condition: service_healthy
     ports:
       - "8090:8000"
 
+  # ---------------------------------------------------------------- message broker
+  message-broker:
+    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.1.0}
+    container_name: pad17-message-broker
+    environment:
+      DISCOVERY_URL: http://discovery-service:8000
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+    ports:
+      - "8100:8000" # optional: lets you open /health and /logs from your browser
+      
  # ---------------------------------------------------------------- discovery
   discovery-service:
     image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
