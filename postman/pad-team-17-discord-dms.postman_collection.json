@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
     "name": "Discord DMs \u2014 Lab 3",
-    "description": "Use Gateway base_url=http://localhost:8090 and set token to a real login JWT, player_id to its player UUID, and session_id to a dedicated test session. Run Channels, Messages, then Cleanup in that order. The collection creates and deletes its own test channel/messages. Never substitute a real session-provisioned channel for channel_id. Requires the updated Discord release: REST provisioning returns 410; Session provisions memberships through internal gRPC. Discovery checks are optional and separate: discovery_url is intentionally empty because CPR does not publish Discovery. Supply an explicitly forwarded local address or an address reachable from a runner on the Docker network. Capture/recovery requests require a manual Discovery restart between them; a normal collection run does not prove restart recovery. Health uses the Discord proxy, not Gateway. HTTP checks do not prove Socket.IO authentication or cross-replica delivery. Do not commit tokens.",
+    "description": "Requires the Discord REST permissions release. Use Gateway base_url=http://localhost:8090 and set token to a real login JWT, player_id to its subject and session_id to a dedicated test session. Start the session through Session Service, then set channel_id to one of its provisioned channels containing that player. Run Channels then Messages. Public channel creation/update/deletion must return 403; REST provisioning must return 410. Message operations create, edit and delete only this run's test message. Provisioned channels remain in place. Do not run these mutation checks against an older deployment. Discovery checks are optional: discovery_url is empty because CPR does not publish it. Supply an explicitly reachable address. Recovery checks need a manual Discovery restart between baseline/recovery requests. HTTP checks do not establish Socket.IO authentication, cross-replica delivery or complete authorization coverage. Do not commit tokens.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -24,7 +24,7 @@
     {
       "key": "channel_id",
       "value": "",
-      "description": "Set automatically after successful Create Channel."
+      "description": "Set to an existing Session-provisioned channel containing the authenticated player; never overwritten by mutation checks."
     },
     {
       "key": "message_id",
@@ -89,19 +89,14 @@
       "name": "Channels",
       "item": [
         {
-          "name": "Create Channel",
+          "name": "Reject create channel",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Channel created', () => pm.response.to.have.status(201));",
-                  "if (pm.response.code === 201) {",
-                  "  const response = pm.response.json();",
-                  "  if (response.id) pm.collectionVariables.set('channel_id', response.id);",
-                  "  pm.test('Created channel ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
-                  "}"
+                  "pm.test('Channel mutation denied', () => pm.response.to.have.status(403));"
                 ]
               }
             }
@@ -127,7 +122,7 @@
                 "channels"
               ]
             },
-            "description": "Requires a real session_id and player_id. A successful response stores channel_id. When testing in CPR, use a reachable service/Gateway HTTP route."
+            "description": "Session manages channels; players cannot perform this mutation. Requires the updated permissions release."
           }
         },
         {
@@ -243,7 +238,7 @@
           }
         },
         {
-          "name": "Update Channel",
+          "name": "Reject update channel",
           "request": {
             "method": "PATCH",
             "header": [
@@ -265,7 +260,8 @@
                 "channels",
                 "{{channel_id}}"
               ]
-            }
+            },
+            "description": "Session manages channels; players cannot perform this mutation. Requires the updated permissions release."
           },
           "event": [
             {
@@ -273,7 +269,35 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                  "pm.test('Channel mutation denied', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject delete channel",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            },
+            "description": "Session manages channels; players cannot perform this mutation. Requires the updated permissions release."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Channel mutation denied', () => pm.response.to.have.status(403));"
                 ]
               }
             }
@@ -298,6 +322,15 @@
                   "  if (response.id) pm.collectionVariables.set('message_id', response.id);",
                   "  pm.test('Created message ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
                   "}"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.unset('message_id');"
                 ]
               }
             }
@@ -438,38 +471,6 @@
                 "{{channel_id}}",
                 "messages",
                 "{{message_id}}"
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "Cleanup",
-      "item": [
-        {
-          "name": "Delete Channel",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{base_url}}/channels/{{channel_id}}",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "channels",
-                "{{channel_id}}"
               ]
             }
           },
