@@ -395,6 +395,7 @@ services:
       replicas: 2
 
     environment:
+      JWT_SECRET: ${JWT_SECRET:?Set the shared JWT signing secret}
       PORT: 3000
       GRPC_URL: 0.0.0.0:9090
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
@@ -412,7 +413,7 @@ services:
 
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.discord.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.discord.rule=PathPrefix(`/socket.io/`) || Path(`/health`)"
       - "traefik.http.routers.discord.entrypoints=discord"
       - "traefik.http.routers.discord.service=discord"
       - "traefik.http.services.discord.loadbalancer.server.port=3000"
