@@ -2427,3 +2427,19 @@ v0.3.0   Lab 2 — Gateway introduced
 
 Service repositories are tagged independently once they publish images; the CPR tag records
 which submodule commits made up a presented state.
+
+
+## Discord public entry-point restrictions
+
+The Discord proxy on port 8086 exposes only `/socket.io/` (including the WebSocket upgrade and
+polling transport) and the exact `/health` endpoint. Channel, message and session REST requests
+must use the authenticated Gateway on port 8090. Direct REST requests to 8086 return 404.
+The trailing slash in the Socket.IO path is intentional; unrelated paths are not routed.
+
+For the socket-authentication service release, pass the login JWT through Socket.IO
+`auth: { token }`. Discord receives the shared `JWT_SECRET` from Compose. All replicas, Player
+and Gateway must use the same secret. Deploy the Discord socket-authentication change before
+claiming authenticated socket access; these Compose changes alone do not authenticate sockets.
+
+Keep the application service ports internal. Restricting proxy paths closes the direct public
+REST bypass; resource-level checks inside the service remain necessary for authenticated users.
