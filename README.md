@@ -65,9 +65,9 @@ rebuild, pull, or deploy the Docker image.
   Registration heartbeats restore instances after a Discovery restart or deregistration.
 - **Moderation:** two replicas share PostgreSQL and RabbitMQ. The updated service supports
   instance-aware gRPC routing and per-instance circuit breakers for Applicant, Credential,
-  University Record, and Server Rules. `GRPC_DISCOVERY_ENABLED` is **off by default**; enable it
-  only after all four dependencies advertise healthy gRPC instances in Discovery. Otherwise the
-  configured static `*_GRPC_URL` endpoints remain in use.
+  University Record, and Server Rules. `GRPC_DISCOVERY_ENABLED=true` is set in the supplied CPR Compose.
+  All four dependencies must advertise healthy gRPC instances in Discovery. The service
+  also supports static `*_GRPC_URL` endpoints when discovery routing is disabled.
 - **Discord DMs:** two replicas share PostgreSQL and `REDIS_URL=redis://redis:6379`. The Socket.IO
   Redis adapter distributes events between replicas. Traefik balances incoming connections and
   issues a sticky `discord_route` cookie, needed for Socket.IO HTTP long-polling sessions.
@@ -1949,17 +1949,21 @@ No other microservice directly accesses the Moderation Service database.
 
 The CPR collection is
 [`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json).
-It starts with Gateway-based player registration/login, then exercises decision creation, listing,
-lookup, modification, validation errors, duplicates, deletion, and missing-resource handling.
-It captures `decision_id` from the create response and uses `base_url=http://localhost:8090`.
+Set a moderator login `token`, its `player_id`, an active test `session_id`, and its current
+`applicant_id` with initialized credentials and university record. Use Gateway at
+`base_url=http://localhost:8090`. The collection checks unauthenticated/invalid submissions,
+creates one final decision, reads it, and checks duplicate/edit/delete rejection.
+It captures `decision_id`. A run submits a real verdict: use a fresh test applicant for each run.
+A successful submission does not prove that Session consumed its event or updated its score.
+Run against the updated service release; merging CPR collections does not deploy service code.
 
 #### Lab 3 integration notes
 
 - The Docker image is `v0.4.0` and runs as **two replicas** with periodic Service Discovery
   registration and automatic recovery after Discovery restarts.
 - The discovery-backed gRPC router and per-instance circuit breakers are implemented and tested
-  in the service, but are **opt-in** (`GRPC_DISCOVERY_ENABLED=true`) and are **not enabled in the
-  supplied CPR Compose configuration**.
+  in the service and **enabled in the supplied CPR Compose configuration**
+  (`GRPC_DISCOVERY_ENABLED=true`).
 - If you enable this routing mode, first verify registration of Applicant, Credential,
   University Record and Server Rules, including each instance's `grpc_port`.
 - Static gRPC URLs still exist for the default configuration and as the service's fallback mode.
@@ -2242,19 +2246,18 @@ No other microservice directly accesses the Discord DMs database.
 
 The CPR collection is
 [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
-It includes Gateway-based setup for a Moderator and Junior Moderator, REST channel/message
-operations, Gateway WebSocket negotiation (`GET /ws/discord-dms`), and preparation of a
-shared channel for Socket.IO testing.
+Set a real login `token`, `player_id`, and test `session_id`. Run the Channels and Messages
+folders before Cleanup; cleanup removes only the channel created by this run. REST provisioning
+must return 410 in the updated Discord release. Real session memberships are provisioned by gRPC.
+Health requests use `discord_proxy_url=http://localhost:8086`; REST requests use Gateway on 8090.
+Discovery checks are optional: `discovery_url` has no default because CPR does not publish it.
+Set a reachable internal or explicitly forwarded address. Restart recovery requires a manual
+Discovery restart between the baseline and recovery requests.
 
-Postman's legacy HTTP collection format does not encode live Socket.IO sessions. Create two
-Socket.IO requests in Postman using the `socketio_url` saved during negotiation; use
-`socket_channel_id`, `player_id`, and `junior_player_id` from the setup requests. Each socket
-emits `join_channel`; one emits `send_message` and the other listens for `message`.
-
-For a **cross-replica** test, connect the two sockets using distinct Traefik sticky cookies
-obtained from `/health` requests that identify different replica instances. Verify that the
-second client receives the first client's message. This end-to-end test is **still pending**;
-HTTP balancing, sticky routing and Redis connections have already been checked separately.
+The HTTP collection does not exercise live Socket.IO connections. For separate socket tests,
+pass each player's login JWT using `auth: { token }`, use a shared channel containing both
+players, emit `join_channel`, then send and receive a message. Use distinct replica connections
+to establish cross-replica delivery. Reverify this after deploying the authentication changes.
 
 #### Lab 3 integration notes
 
