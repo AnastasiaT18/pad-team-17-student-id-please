@@ -1,15 +1,15 @@
 {
   "info": {
     "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
-    "name": "Discord DMs — Lab 3",
-    "description": "# Discord DMs — Lab 3 Postman collection\n\nContains the original HTTP API examples plus read-only checks for Health and Service Discovery, including two-replica validation and recovery after a Discovery restart.\n\n**API URL:** Set `base_url` to a directly reachable instance (default `http://localhost:3000` for standalone development). The CPR Compose deployment does not publish Moderation HTTP ports, and the future two-replica Discord deployment should not publish a fixed `8086:3000` port. For end-to-end API requests use a Gateway URL only when that Gateway exposes the relevant endpoint and configure any required authentication.\n\n**Discovery URL:** `discovery_url` defaults to `http://localhost:18000`. Discovery is only reachable inside the CPR Docker network unless you publish/forward its port; do not expose it publicly.\n\n**Real data:** Set the IDs from a real created shift/session and its applicant/player before running the functional API workflow. An arbitrary UUID is not proof of an existing record.\n\n**Replica checks:** Run `Lab 3 - Service Discovery / 3. Verify Registered Replicas` only after deployment and health checks; `expected_replicas` defaults to 2. To test restart recovery, run `4. Capture IDs Before Discovery Restart`, restart only Discovery in Docker, allow the heartbeat interval (15s) and health monitor to complete, then run `5. Verify IDs After Discovery Restart`. The collection does not restart containers or attempt to re-register instances itself.\n\n**Important:** Discovery API checks verify service registration and health, *not* complete HTTP load balancing, gRPC circuit-breaking, or Socket.IO Redis cross-replica fan-out.\n\nThe pre-existing `Provision Session Channels` request documents an old mocked-Session flow; check whether that endpoint uses a real Session Service in the currently deployed version.\n",
+    "name": "Discord DMs \u2014 Lab 3",
+    "description": "Use Gateway base_url=http://localhost:8090 and set token to a real login JWT, player_id to its player UUID, and session_id to a dedicated test session. Run Channels, Messages, then Cleanup in that order. The collection creates and deletes its own test channel/messages. Never substitute a real session-provisioned channel for channel_id. Requires the updated Discord release: REST provisioning returns 410; Session provisions memberships through internal gRPC. Discovery checks are optional and separate: discovery_url is intentionally empty because CPR does not publish Discovery. Supply an explicitly forwarded local address or an address reachable from a runner on the Docker network. Capture/recovery requests require a manual Discovery restart between them; a normal collection run does not prove restart recovery. Health uses the Discord proxy, not Gateway. HTTP checks do not prove Socket.IO authentication or cross-replica delivery. Do not commit tokens.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:3000",
-      "description": "Direct service HTTP URL in standalone mode; use reachable proxy/Gateway for deployed API routes."
+      "value": "http://localhost:8090",
+      "description": "Authenticated Gateway URL"
     },
     {
       "key": "session_id",
@@ -33,9 +33,9 @@
     },
     {
       "key": "discovery_url",
-      "value": "http://localhost:18000",
+      "value": "",
       "type": "string",
-      "description": "Host-local Discovery URL, forwarded from CPR container; not published by default."
+      "description": "Optional explicitly reachable Discovery URL; not published by CPR"
     },
     {
       "key": "expected_replicas",
@@ -72,6 +72,16 @@
       "value": "",
       "type": "string",
       "description": "Set from second registered instance in the Discovery replica check."
+    },
+    {
+      "key": "token",
+      "value": "",
+      "description": ""
+    },
+    {
+      "key": "discord_proxy_url",
+      "value": "http://localhost:8086",
+      "description": ""
     }
   ],
   "item": [
@@ -133,7 +143,18 @@
                 "channels"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Channel",
@@ -149,7 +170,18 @@
                 "{{channel_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Session Channels",
@@ -166,46 +198,28 @@
                 "channels"
               ]
             }
-          }
-        },
-        {
-          "name": "Provision Session Channels",
+          },
           "event": [
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status code is 201', function () {",
-                  "    pm.response.to.have.status(201);",
-                  "});",
-                  "",
-                  "pm.test('Four channels are provisioned', function () {",
-                  "    const channels = pm.response.json();",
-                  "",
-                  "    pm.expect(channels).to.be.an('array');",
-                  "    pm.expect(channels).to.have.length(4);",
-                  "});",
-                  "",
-                  "pm.test('Expected channels are present', function () {",
-                  "    const channels = pm.response.json();",
-                  "    const names = channels.map((channel) => channel.name);",
-                  "",
-                  "    pm.expect(names).to.include.members([",
-                  "        'enrollment-check',",
-                  "        'course-registration',",
-                  "        'schedule-check',",
-                  "        'general-mod-chat'",
-                  "    ]);",
-                  "});",
-                  "",
-                  "pm.test('All provisioned channels belong to the session', function () {",
-                  "    const channels = pm.response.json();",
-                  "    const sessionId = pm.collectionVariables.get('session_id');",
-                  "",
-                  "    channels.forEach((channel) => {",
-                  "        pm.expect(channel.session_id).to.eql(sessionId);",
-                  "    });",
-                  "});"
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject REST session provisioning",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('REST provisioning retired', () => pm.response.to.have.status(410));"
                 ]
               }
             }
@@ -225,7 +239,7 @@
                 "provision"
               ]
             },
-            "description": "Legacy request carried forward from the supplied collection. That collection described this as a Lab 1 mocked Session Service provisioning flow with four fixed channels. Verify the live service implementation before considering the 4-channel assertion an integration test of real Session Service functionality."
+            "description": "Session owns provisioning through internal gRPC. This retired REST route must not overwrite memberships."
           }
         },
         {
@@ -252,23 +266,18 @@
                 "{{channel_id}}"
               ]
             }
-          }
-        },
-        {
-          "name": "Delete Channel",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{base_url}}/channels/{{channel_id}}",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "channels",
-                "{{channel_id}}"
-              ]
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
             }
-          }
+          ]
         }
       ]
     },
@@ -334,7 +343,18 @@
                 "messages"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Message",
@@ -352,7 +372,18 @@
                 "{{message_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Update Message",
@@ -380,7 +411,18 @@
                 "{{message_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Delete Message",
@@ -398,7 +440,50 @@
                 "{{message_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "item": [
+        {
+          "name": "Delete Channel",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/channels/{{channel_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "channels",
+                "{{channel_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -421,7 +506,8 @@
                   "    pm.expect(body).to.be.an('object');",
                   "    pm.expect(body.status).to.eql('UP');",
                   "  });",
-                  "}"
+                  "}",
+                  "pm.test('Discord health identity', () => pm.expect(pm.response.json().service).to.eql('discord-dms-service'));"
                 ]
               }
             }
@@ -429,16 +515,11 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": {
-              "raw": "{{base_url}}/health",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "health"
-              ]
-            },
-            "description": "Direct service health check; with base_url pointed at a Gateway this could check the Gateway instead. Use a direct instance URL if you need the actual service health endpoint."
+            "url": "{{discord_proxy_url}}/health",
+            "description": "Discord health through its public proxy.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -466,7 +547,10 @@
                 "health"
               ]
             },
-            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description)."
+            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description).",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -513,7 +597,10 @@
                 "discord-dms-service"
               ]
             },
-            "description": "Checks discord-dms-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart."
+            "description": "Checks discord-dms-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -553,7 +640,10 @@
                 "discord-dms-service"
               ]
             },
-            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check."
+            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -591,10 +681,23 @@
                 "discord-dms-service"
               ]
             },
-            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary."
+            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         }
       ]
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
 }
