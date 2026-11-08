@@ -2246,9 +2246,15 @@ No other microservice directly accesses the Discord DMs database.
 
 The CPR collection is
 [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
-Set a real login `token`, `player_id`, and test `session_id`. Run the Channels and Messages
-folders before Cleanup; cleanup removes only the channel created by this run. REST provisioning
-must return 410 in the updated Discord release. Real session memberships are provisioned by gRPC.
+Set a real login `token`, its `player_id`, and test `session_id`. Start the session through
+Session Service and set `channel_id` to one of its provisioned channels containing that player.
+Run Channels then Messages. Public channel creation, update and deletion must return 403;
+REST provisioning must return 410. Message tests create, edit and delete their own test message.
+Provisioned channels remain in place. These expectations require the Discord REST permissions
+release; do not run the mutation checks against an older deployment.
+Channel lists include only memberships; message reads/sends require membership, and message
+edits/deletes require authorship as well. The collection is a smoke test, not proof of every
+cross-player denial; the service's HTTP permission suite covers those cases with test doubles.
 Health requests use `discord_proxy_url=http://localhost:8086`; REST requests use Gateway on 8090.
 Discovery checks are optional: `discovery_url` has no default because CPR does not publish it.
 Set a reachable internal or explicitly forwarded address. Restart recovery requires a manual
