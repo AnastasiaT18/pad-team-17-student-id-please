@@ -2440,6 +2440,23 @@ instance its load, how often it was chosen and whether its circuit is open.
 **Running it:** image `anastasiatiganescu/message-broker` (`BROKER_VERSION`), `DISCOVERY_URL`
 pointing at Service Discovery, published on `localhost:8100` for `/health`, `/logs` and `/metrics`.
 
+**Grade 9 durable storage:** Compose sets `EVENT_DB_PATH=/data/events.db` and mounts
+`message-broker-data` at `/data`. The database and SQLite journal files therefore
+survive broker container recreation and ordinary `docker compose down` / `up`.
+Keep the same Compose project name when restarting so the same named volume is
+used. `docker compose down -v` deletes the volume and its stored queue records.
+
+This preserves accepted event payloads, subscriber delivery states, retry counts,
+leases, completed-message deduplication records and dead letters. The broker
+recovers pending deliveries using its existing dispatcher. The volume does not
+make the in-memory Gateway request queues persistent.
+
+The volume must be configured before relying on durable publication. Mounting it
+on an existing deployment does not copy the old container's database into it;
+preserve any existing queue data before replacing that container. Use a broker
+image containing the grade 9 implementation; adding the volume alone does not
+publish or update the image.
+
 **Postman:** [`postman/pad-team-17-message-broker.postman_collection.json`](postman/pad-team-17-message-broker.postman_collection.json)
 calls the broker directly on `localhost:8100`: forwarding to the least loaded replica, publishing an
 event (accepted, duplicate, conflicting `message_id`, invalid, no subscribers) and its delivery to
