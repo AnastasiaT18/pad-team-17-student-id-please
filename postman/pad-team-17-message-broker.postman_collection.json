@@ -1,0 +1,541 @@
+{
+  "info": {
+    "name": "Message Broker",
+    "description": "Message Broker - Team 17 \"Student ID, please\" (Lab 4).\n\nThe internal component between the Gateway and the services, and between the services for events. It is not routed through the Gateway, so these requests go to the broker directly, on the port the team's Compose file publishes (localhost:8100).\n\nCovers forwarding a request to the least loaded instance, publishing an event and its delivery to the subscribing service, the duplicate and error answers of /publish, the logs download and the metrics.\n\nRun the team's docker-compose.yml first. Requests are ordered to run start to finish: the event published in \"Events\" is checked on Credential Service at the end of that folder.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health and logs",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/health",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "The broker's own state, in the same shape as every service's /health."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('the broker is UP', () => pm.expect(body.status).to.eql('UP'));",
+                  "pm.test('it names itself', () => pm.expect(body.service).to.eql('message-broker'));",
+                  "pm.test('it reports its load', () => pm.expect(body.load.utilization).to.be.within(0, 1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logs - the last 20 lines",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/logs?tail=20",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "logs"
+              ],
+              "query": [
+                {
+                  "key": "tail",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Grade 4: the end of the broker's log, as plain text."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('plain text', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain'));",
+                  "pm.test('at most 20 lines', () => pm.expect(pm.response.text().split('\\n').length).to.be.at.most(20));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logs - download the file",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/logs",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "logs"
+              ]
+            },
+            "description": "Grade 4: the whole log file, as a download."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('sent as a file', () => pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Forwarding (Gateway to service)",
+      "item": [
+        {
+          "name": "Forward to Applicant - the service answers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/forward/applicant-service/applicants/11111111-1111-4111-8111-111111111111",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "applicant-service",
+                "applicants",
+                "11111111-1111-4111-8111-111111111111"
+              ]
+            },
+            "description": "What the Gateway does for every request: the broker picks an instance of the service and passes its answer back unchanged. This applicant does not exist, so the answer is Applicant Service's own 404."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 from the service itself', () => pm.response.to.have.status(404));",
+                  "pm.test('the service\\'s error code comes back unchanged', () => pm.expect(pm.response.json().error.code).to.eql('APPLICANT_NOT_FOUND'));",
+                  "const instance = pm.response.headers.get('X-Instance-Id');",
+                  "pm.test('the answering replica is named', () => pm.expect(instance).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('first_instance', instance);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forward again - the other replica answers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/forward/applicant-service/applicants/11111111-1111-4111-8111-111111111111",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "applicant-service",
+                "applicants",
+                "11111111-1111-4111-8111-111111111111"
+              ]
+            },
+            "description": "Both replicas are idle, so they are equally loaded and take turns: this request goes to the other one."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 from the service itself', () => pm.response.to.have.status(404));",
+                  "pm.test('a different replica answered', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.not.eql(pm.collectionVariables.get('first_instance')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forward to a service nobody registered",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/forward/no-such-service/anything",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "no-such-service",
+                "anything"
+              ]
+            },
+            "description": "Service Discovery lists no instance of this service, so there is nobody to send the request to."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('503 Service Unavailable', () => pm.response.to.have.status(503));",
+                  "pm.test('error code is NO_HEALTHY_INSTANCES', () => pm.expect(pm.response.json().error.code).to.eql('NO_HEALTHY_INSTANCES'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Events (service to service)",
+      "item": [
+        {
+          "name": "Publish applicant_initialized",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{broker_url}}/publish",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "publish"
+              ]
+            },
+            "description": "What Applicant Service does once it mints an applicant. The broker stores the event and answers with the services that registered the topic; it delivers it to them in the background.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"applicant_initialized\",\n  \"message_id\": \"{{message_id}}\",\n  \"payload\": {\n    \"applicant_id\": \"{{applicant_id}}\",\n    \"deception\": \"false_year\",\n    \"name\": \"Postman Broker\",\n    \"student_id\": \"IA-24-0901\",\n    \"major\": \"FAF\",\n    \"year\": 3,\n    \"university_status\": \"faf_student\",\n    \"courses\": [\n      \"PAD\"\n    ],\n    \"role\": \"STUDENT\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A new event every run: its own message_id, about a new applicant.",
+                  "pm.collectionVariables.set('message_id', pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('applicant_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('the same message_id comes back', () => pm.expect(body.message_id).to.eql(pm.collectionVariables.get('message_id')));",
+                  "pm.test('Credential Service subscribed to the topic', () => pm.expect(body.subscribers).to.include('credential-service'));",
+                  "pm.test('it is new', () => pm.expect(body.duplicate).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish the same message again - a duplicate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{broker_url}}/publish",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "publish"
+              ]
+            },
+            "description": "A publisher that did not get the answer sends the same message again. Same message_id and content: accepted again, but nothing new is queued.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"applicant_initialized\",\n  \"message_id\": \"{{message_id}}\",\n  \"payload\": {\n    \"applicant_id\": \"{{applicant_id}}\",\n    \"deception\": \"false_year\",\n    \"name\": \"Postman Broker\",\n    \"student_id\": \"IA-24-0901\",\n    \"major\": \"FAF\",\n    \"year\": 3,\n    \"university_status\": \"faf_student\",\n    \"courses\": [\n      \"PAD\"\n    ],\n    \"role\": \"STUDENT\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('recognised as a duplicate', () => pm.expect(pm.response.json().duplicate).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish another event under the same message_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{broker_url}}/publish",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "publish"
+              ]
+            },
+            "description": "A message_id belongs to one event: reusing it for different content is refused.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"applicant_initialized\",\n  \"message_id\": \"{{message_id}}\",\n  \"payload\": {\n    \"applicant_id\": \"{{applicant_id}}\",\n    \"deception\": \"false_year\",\n    \"name\": \"Someone Else\",\n    \"student_id\": \"IA-24-0901\",\n    \"major\": \"FAF\",\n    \"year\": 3,\n    \"university_status\": \"faf_student\",\n    \"courses\": [\n      \"PAD\"\n    ],\n    \"role\": \"STUDENT\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('error code is MESSAGE_ID_CONFLICT', () => pm.expect(pm.response.json().error.code).to.eql('MESSAGE_ID_CONFLICT'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish without a topic",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{broker_url}}/publish",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "publish"
+              ]
+            },
+            "description": "topic, message_id and payload are all required.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message_id\": \"{{$guid}}\",\n  \"payload\": {\n    \"applicant_id\": \"{{applicant_id}}\",\n    \"deception\": \"false_year\",\n    \"name\": \"Postman Broker\",\n    \"student_id\": \"IA-24-0901\",\n    \"major\": \"FAF\",\n    \"year\": 3,\n    \"university_status\": \"faf_student\",\n    \"courses\": [\n      \"PAD\"\n    ],\n    \"role\": \"STUDENT\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('error code is VALIDATION_FAILED', () => pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish a topic nobody subscribed to",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{broker_url}}/publish",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "publish"
+              ]
+            },
+            "description": "No service registered this topic with Service Discovery, so the broker does not store the event and the publisher keeps it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"nobody_listens\",\n  \"message_id\": \"{{$guid}}\",\n  \"payload\": {\n    \"applicant_id\": \"{{applicant_id}}\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('503 Service Unavailable', () => pm.response.to.have.status(503));",
+                  "pm.test('error code is NO_SUBSCRIBERS', () => pm.expect(pm.response.json().error.code).to.eql('NO_SUBSCRIBERS'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Credential Service got the event",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/forward/credential-service/credentials/{{applicant_id}}",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "credential-service",
+                "credentials",
+                "{{applicant_id}}"
+              ]
+            },
+            "description": "The event published above, delivered by the broker as POST /events/applicant_initialized: Credential Service forged the documents for that applicant."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Delivery happens in the background: give the broker a moment.",
+                  "setTimeout(() => {}, 3000);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('documents of the applicant from the event', () => pm.expect(body.applicant_id).to.eql(pm.collectionVariables.get('applicant_id')));",
+                  "pm.test('the documents were forged', () => {",
+                  "  pm.expect(body).to.have.property('student_id_doc');",
+                  "  pm.expect(body).to.have.property('university_email');",
+                  "});",
+                  "pm.test('deception is never exposed', () => pm.expect(body).to.not.have.property('deception'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Metrics",
+      "item": [
+        {
+          "name": "Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/metrics",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "description": "What Prometheus collects: requests by status, events published and delivered, and for every instance its load, how often it was chosen and whether its circuit is open."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const text = pm.response.text();",
+                  "pm.test('Prometheus text format', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain'));",
+                  "pm.test('the broker\\'s own load', () => pm.expect(text).to.include('service_utilization{'));",
+                  "pm.test('requests routed to Applicant instances', () => pm.expect(text).to.match(/broker_routed_total\\{[^}]*backend=\"applicant-service\"/));",
+                  "pm.test('the load of every instance', () => pm.expect(text).to.include('broker_backend_utilization{'));",
+                  "pm.test('events published', () => pm.expect(text).to.include('broker_events_published_total'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "broker_url",
+      "value": "http://localhost:8100"
+    },
+    {
+      "key": "first_instance",
+      "value": ""
+    },
+    {
+      "key": "message_id",
+      "value": ""
+    },
+    {
+      "key": "applicant_id",
+      "value": ""
+    }
+  ]
+}

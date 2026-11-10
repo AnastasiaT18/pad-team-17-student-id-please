@@ -2440,6 +2440,11 @@ instance its load, how often it was chosen and whether its circuit is open.
 **Running it:** image `anastasiatiganescu/message-broker` (`BROKER_VERSION`), `DISCOVERY_URL`
 pointing at Service Discovery, published on `localhost:8100` for `/health`, `/logs` and `/metrics`.
 
+**Postman:** [`postman/pad-team-17-message-broker.postman_collection.json`](postman/pad-team-17-message-broker.postman_collection.json)
+calls the broker directly on `localhost:8100`: forwarding to the least loaded replica, publishing an
+event (accepted, duplicate, conflicting `message_id`, invalid, no subscribers) and its delivery to
+Credential Service, the logs download and the metrics.
+
 ## Source submodules and Docker images
 
 The service directories under `services/` are **Git submodules**. CPR records the exact commit
