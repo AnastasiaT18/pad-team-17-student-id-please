@@ -273,17 +273,15 @@ services:
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-3.1.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.0.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
       DB_NAME: applicant
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # Events are published to the Message Broker, which delivers the topics this service registers.
+      BROKER_URL: http://message-broker:8000
       SERVER_PORT: 8081
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
@@ -293,23 +291,21 @@ services:
     depends_on:
       applicant-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
       discovery-service:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-3.1.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.0.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432
       DB_NAME: credential
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # Events are published to the Message Broker, which delivers the topics this service registers.
+      BROKER_URL: http://message-broker:8000
       SERVER_PORT: 8082
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
@@ -319,7 +315,7 @@ services:
     depends_on:
       credential-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
       discovery-service:
         condition: service_healthy
