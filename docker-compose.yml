@@ -182,6 +182,9 @@ services:
     container_name: pad17-message-broker
     environment:
       DISCOVERY_URL: http://discovery-service:8000
+      EVENT_DB_PATH: /data/events.db
+    volumes:
+      - message-broker-data:/data
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -470,6 +473,7 @@ services:
       - discord-dms-service
 
 volumes:
+  message-broker-data:
   rabbitmq-data:
   player-db-data:
   server-moderation-session-db-data:
