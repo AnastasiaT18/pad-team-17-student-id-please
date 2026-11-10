@@ -578,38 +578,64 @@
                 "dead-letters"
               ]
             },
-            "description": "Grade 9: the deliveries that can never succeed, kept in the durable queue. Reading them does not retry or remove them."
+            "description": "Grade 9: poll for up to 20 seconds for this message and Credential Service together. Other subscribers may fail independently. Reading dead letters does not retry or remove them. The scenario requires Credential Service to reject this payload with HTTP 422."
           },
           "response": [],
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Delivery happens in the background: give the broker a moment.",
-                  "setTimeout(() => {}, 3000);"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "const letter = pm.response.json().dead_letters",
-                  "  .find((d) => d.message_id === pm.collectionVariables.get('dead_message_id'));",
-                  "pm.test('the refused event is a dead letter', () => pm.expect(letter).to.be.an('object'));",
-                  "pm.test('for Credential Service, on the topic it was published on', () => {",
-                  "  pm.expect(letter.service).to.eql('credential-service');",
-                  "  pm.expect(letter.topic).to.eql('applicant_initialized');",
-                  "});",
-                  "pm.test('refused at once: one attempt, HTTP 422', () => {",
-                  "  pm.expect(letter.attempts).to.eql(1);",
-                  "  pm.expect(letter.last_error).to.eql('HTTP 422');",
-                  "});",
-                  "pm.test('the payload is kept as it was published', () => pm.expect(letter.payload).to.eql({ name: 'No Identity' }));"
+                  "const messageId = pm.collectionVariables.get('dead_message_id');",
+                  "const subscriber = 'credential-service';",
+                  "const deadline = Date.now() + 20000;",
+                  "const url = pm.variables.replaceIn('{{broker_url}}/dead-letters');",
+                  "",
+                  "function inspect(response) {",
+                  "  pm.test('200 OK while reading dead letters', () => pm.expect(response.code).to.eql(200));",
+                  "  if (response.code !== 200) return;",
+                  "  let letters;",
+                  "  try {",
+                  "    letters = response.json().dead_letters;",
+                  "    if (!Array.isArray(letters)) throw new Error('dead_letters must be an array');",
+                  "  } catch (error) {",
+                  "    pm.test('valid dead-letter response', () => { throw error; });",
+                  "    return;",
+                  "  }",
+                  "  const letter = letters.find((entry) => entry.message_id === messageId && entry.service === subscriber);",
+                  "  if (!letter && Date.now() < deadline) {",
+                  "    setTimeout(() => {",
+                  "      if (Date.now() >= deadline) return finish(undefined);",
+                  "      pm.sendRequest({ url, method: 'GET', timeout: Math.max(1, deadline - Date.now()) }, (error, next) => {",
+                  "        if (error) {",
+                  "          pm.test('dead-letter polling succeeds', () => pm.expect(error).to.eql(null));",
+                  "          return;",
+                  "        }",
+                  "        inspect(next);",
+                  "      });",
+                  "    }, 500);",
+                  "    return;",
+                  "  }",
+                  "  finish(letter);",
+                  "}",
+                  "",
+                  "function finish(letter) {",
+                  "  pm.test('Credential Service refused this event within 20 seconds', () => pm.expect(letter).to.be.an('object'));",
+                  "  if (!letter) return;",
+                  "  pm.test('the intended subscriber and topic are preserved', () => {",
+                  "    pm.expect(letter.service).to.eql(subscriber);",
+                  "    pm.expect(letter.topic).to.eql('applicant_initialized');",
+                  "  });",
+                  "  pm.test('refused at once: one attempt, HTTP 422', () => {",
+                  "    pm.expect(letter.attempts).to.eql(1);",
+                  "    pm.expect(letter.last_error).to.eql('HTTP 422');",
+                  "  });",
+                  "  pm.test('the payload is kept as published', () => pm.expect(letter.payload).to.eql({ name: 'No Identity' }));",
+                  "}",
+                  "",
+                  "pm.test('the scenario has a message ID', () => pm.expect(messageId).to.be.a('string').and.not.empty);",
+                  "if (typeof messageId === 'string' && messageId.length > 0) inspect(pm.response);"
                 ]
               }
             }

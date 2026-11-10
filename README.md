@@ -2483,7 +2483,12 @@ publish or update the image.
 calls the broker directly on `localhost:8100`: forwarding to the least loaded replica, publishing an
 event (accepted, duplicate, conflicting `message_id`, invalid, no subscribers) and its delivery to
 Credential Service, the topics, an event Credential Service refused in the dead letters, the logs
-download and the metrics.
+download and the metrics. The dead-letter request polls for up to 20 seconds and matches
+both the generated message ID and `credential-service`, since other subscribers can
+fail independently. Run the preceding invalid-publication request first. A timeout
+fails the check; it does not imply the event was handled. This scenario requires a
+Credential image that subscribes through the broker and rejects the invalid payload
+with HTTP 422.
 
 ## Source submodules and Docker images
 
