@@ -1423,9 +1423,10 @@ message GetSessionStatusResponse { string status = 1; }
   "role": "string"
 }
 ```
-Sent as `POST {BROKER_URL}/publish` with `topic`, `message_id` and the event as `payload`, once the
-applicant is committed and in the background; when the broker cannot be reached or answers `5xx`,
-the same message (same `message_id`) goes again after 1, 2 and 4 s. The service does not know who
+Sent over gRPC (Grade 8) with `MessageBroker.Publish` to `BROKER_GRPC_ADDRESS` - `topic`, `message_id`
+and the event as `payload_json` - once the applicant is committed and in the background. When the
+broker cannot be reached or cannot take it now (`UNAVAILABLE`), the same message (same `message_id`)
+goes again after 1, 2 and 4 s. With `BROKER_GRPC_ADDRESS` empty it is `POST {BROKER_URL}/publish` instead. The service does not know who
 listens: the broker delivers it to every service that registered the topic - Credential Service and
 University Record Service, which build their own documents/records for this applicant, so all three
 stay in sync.
@@ -1433,10 +1434,13 @@ stay in sync.
 **Events delivered here (through the Message Broker, Lab 4)**
 
 The broker sends every event whose topic this service registered (`credential_initialized`,
-`record_initialized`) to one replica, as `POST /events/{topic}` with the event as the body and its
-id in `X-Message-Id`. The answer tells the broker what to do next: `204` handled (a duplicate too),
-`400`/`404 UNKNOWN_TOPIC`/`422` never handleable (dead letter), `429`/`5xx` try again. `/events` is
-internal - the Gateway has no route to it.
+`record_initialized`) to one replica, over gRPC: `EventSubscriber.Deliver` on the replica's gRPC
+port (9090), which it registered with Service Discovery, with the topic, `message_id` and
+`payload_json`. The status tells the broker what to do next: `OK` handled (a duplicate too),
+`INVALID_ARGUMENT`/`NOT_FOUND` never handleable (dead letter), `INTERNAL` try again. A broker
+without gRPC uses `POST /events/{topic}` (the event as the body, its id in `X-Message-Id`): `204`
+handled, `400`/`404 UNKNOWN_TOPIC`/`422` dead letter, `429`/`5xx` try again. Neither is reachable
+through the Gateway.
 
 `credential_initialized` - published by Credential Service when it's contacted first instead.
 ```json
@@ -1728,19 +1732,23 @@ message GetSessionStatusResponse { string status = 1; }
   "course_registration": ["string"]
 }
 ```
-Sent as `POST {BROKER_URL}/publish` with `topic`, `message_id` and the event as `payload`, once the
-documents are committed and in the background; when the broker cannot be reached or answers `5xx`,
-the same message (same `message_id`) goes again after 1, 2 and 4 s. The service does not know who
+Sent over gRPC (Grade 8) with `MessageBroker.Publish` to `BROKER_GRPC_ADDRESS` - `topic`, `message_id`
+and the event as `payload_json` - once the documents are committed and in the background. When the
+broker cannot be reached or cannot take it now (`UNAVAILABLE`), the same message (same `message_id`)
+goes again after 1, 2 and 4 s. With `BROKER_GRPC_ADDRESS` empty it is `POST {BROKER_URL}/publish` instead. The service does not know who
 listens: the broker delivers it to every service that registered the topic - Applicant Service and
 University Record Service, which build their own data for this applicant.
 
 **Events delivered here (through the Message Broker, Lab 4)**
 
 The broker sends every event whose topic this service registered (`applicant_initialized`,
-`record_initialized`) to one replica, as `POST /events/{topic}` with the event as the body and its
-id in `X-Message-Id`. The answer tells the broker what to do next: `204` handled (a duplicate too),
-`400`/`404 UNKNOWN_TOPIC`/`422` never handleable (dead letter), `429`/`5xx` try again. `/events` is
-internal - the Gateway has no route to it.
+`record_initialized`) to one replica, over gRPC: `EventSubscriber.Deliver` on the replica's gRPC
+port (9090), which it registered with Service Discovery, with the topic, `message_id` and
+`payload_json`. The status tells the broker what to do next: `OK` handled (a duplicate too),
+`INVALID_ARGUMENT`/`NOT_FOUND` never handleable (dead letter), `INTERNAL` try again. A broker
+without gRPC uses `POST /events/{topic}` (the event as the body, its id in `X-Message-Id`): `204`
+handled, `400`/`404 UNKNOWN_TOPIC`/`422` dead letter, `429`/`5xx` try again. Neither is reachable
+through the Gateway.
 
 `applicant_initialized` - published by Applicant Service when it's contacted first instead.
 ```json

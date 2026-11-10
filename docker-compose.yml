@@ -280,7 +280,9 @@ services:
       DB_NAME: applicant
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
-      # Events are published to the Message Broker, which delivers the topics this service registers.
+      # Events are published to the Message Broker over gRPC, and it delivers the topics this service
+      # registers to its gRPC port. BROKER_URL is the broker's REST API, used if the gRPC address is empty.
+      BROKER_GRPC_ADDRESS: message-broker:9090
       BROKER_URL: http://message-broker:8000
       SERVER_PORT: 8081
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
@@ -304,7 +306,9 @@ services:
       DB_NAME: credential
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
-      # Events are published to the Message Broker, which delivers the topics this service registers.
+      # Events are published to the Message Broker over gRPC, and it delivers the topics this service
+      # registers to its gRPC port. BROKER_URL is the broker's REST API, used if the gRPC address is empty.
+      BROKER_GRPC_ADDRESS: message-broker:9090
       BROKER_URL: http://message-broker:8000
       SERVER_PORT: 8082
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
