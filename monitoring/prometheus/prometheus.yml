@@ -1,0 +1,37 @@
+# Prometheus for Lab 4, Grade 10. Every 5 s it collects the metrics of the Message Broker and of every
+# replica of the services that publish metrics. Grafana (http://localhost:3001) shows them.
+#
+# A replicated service is found through Docker's DNS: its Compose service name resolves to every
+# replica, so each replica is scraped on its own and appears as its own `instance`. A replica that
+# starts or stops is picked up within the refresh interval.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Requests, routing between instances, circuit breakers, queues, events, gRPC vs REST.
+  - job_name: message-broker
+    static_configs:
+      - targets: ["message-broker:8000"]
+
+  # Registrations and health checks; up once the Discovery image with GET /metrics is published.
+  - job_name: discovery-service
+    static_configs:
+      - targets: ["discovery-service:8000"]
+
+  # Spring Boot services: /actuator/prometheus, from version 4.0.0 on.
+  - job_name: applicant-service
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ["applicant-service"]
+        type: A
+        port: 8081
+        refresh_interval: 10s
+
+  - job_name: credential-service
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ["credential-service"]
+        type: A
+        port: 8082
+        refresh_interval: 10s

@@ -39,6 +39,8 @@ docker compose ps
 | API Gateway | `http://localhost:8090` | Authenticated REST API for clients and Postman |
 | Message Broker | `http://localhost:8100` | `GET /health`, `GET /logs`, `GET /metrics` - internal otherwise, see [Message Broker](#message-broker) |
 | Discord DMs reverse proxy | `http://localhost:8086` | Socket.IO connections and Discord health checks |
+| Grafana | `http://localhost:3001` | The monitoring dashboard - see [Monitoring](#monitoring-prometheus-and-grafana-lab-4) |
+| Prometheus | `http://localhost:9091` | What is collected (`Status -> Targets`) and queries |
 | RabbitMQ management | `http://localhost:15672` | Broker administration (credentials from `.env`) |
 | Service Discovery | `http://discovery-service:8000` inside Compose | Internal registration, lookup, and health monitoring; not exposed on the host |
 
@@ -102,6 +104,44 @@ The two REST collections are
 and [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
 Their existing API checks remain useful; dedicated Lab 3 failover and cross-replica tests are
 tracked separately and are not yet presented as passing.
+
+### Monitoring: Prometheus and Grafana (Lab 4)
+
+Grade 10. `docker compose up -d` also starts Prometheus and Grafana; nothing else is needed.
+
+- **Prometheus** ([`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml))
+  collects the metrics every 5 s: `GET /metrics` of the Message Broker (and of Service Discovery,
+  once its image with `/metrics` is published), and `GET /actuator/prometheus` of **every replica** of
+  Applicant and Credential. A replicated service is found through Docker's DNS - its name resolves to
+  all its replicas - so each replica is collected on its own and shows up as its own `instance`.
+  The data is kept for 7 days in the `prometheus-data` volume.
+- **Grafana** opens on the dashboard *PAD Team 17 - Student ID, please*, read-only and without a
+  login. The data source and the dashboard
+  ([`monitoring/grafana/dashboards/pad-team-17.json`](monitoring/grafana/dashboards/pad-team-17.json))
+  are created when Grafana starts; edit the file, not the dashboard in the UI. The admin login is
+  `admin` / `GRAFANA_ADMIN_PASSWORD` from `.env`.
+
+| Dashboard row | What it shows |
+|---|---|
+| Overview | every target Prometheus collects, `UP` or `DOWN` |
+| Message Broker - requests | requests sent to each instance (load balancing), the load each instance reported, open circuit breakers, queue depth, refusals and timeouts, answers by status |
+| Message Broker - events | events published, delivered, retried and dead; publications without a subscriber; publish requests and delivery attempts over gRPC and over REST (Grade 8) |
+| Services | REST requests and busy request workers per replica, events received and published by topic and result, gRPC calls per replica |
+
+A service whose owner adds metrics needs one job in `prometheus.yml` - its Compose service name, the
+port it listens on inside the network, and the path of its metrics:
+
+```yaml
+  - job_name: <service-name>
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["<service-name>"]
+        type: A
+        port: <port>
+```
+
+To check it works: `http://localhost:9091/targets` lists every target and its last scrape; on the
+dashboard, a few requests through the Gateway appear within 10 s.
 
 ---
 
