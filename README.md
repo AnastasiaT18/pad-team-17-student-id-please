@@ -15,8 +15,8 @@ The system is split into 8 microservices, each owning a distinct piece of the ga
 ## Running the integrated stack (Lab 3)
 
 The **CPR repository** is the integration point. `docker-compose.yml` starts the eight application
-services (two replicas each), API Gateway, Service Discovery, PostgreSQL databases, RabbitMQ,
-Redis, and the Discord DMs reverse proxy. Services run from their published Docker Hub images;
+services (two replicas each), API Gateway, Message Broker, Service Discovery, PostgreSQL databases,
+RabbitMQ (until every service publishes through the broker), Redis, and the Discord DMs reverse proxy. Services run from their published Docker Hub images;
 Git submodules pin the source-code revisions for review and traceability, rather than building
 those services locally.
 
@@ -37,6 +37,7 @@ docker compose ps
 | Entry point | Address | Purpose |
 |---|---|---|
 | API Gateway | `http://localhost:8090` | Authenticated REST API for clients and Postman |
+| Message Broker | `http://localhost:8100` | `GET /health`, `GET /logs`, `GET /metrics` - internal otherwise, see [Message Broker](#message-broker) |
 | Discord DMs reverse proxy | `http://localhost:8086` | Socket.IO connections and Discord health checks |
 | RabbitMQ management | `http://localhost:15672` | Broker administration (credentials from `.env`) |
 | Service Discovery | `http://discovery-service:8000` inside Compose | Internal registration, lookup, and health monitoring; not exposed on the host |
@@ -164,14 +165,26 @@ the current session.
 
 Arrows point from the service that initiates a call to the service it calls.
 
+What Lab 4 added is in blue. The Gateway now only checks the JWT and lets through the public
+routes; every request goes on to the **Message Broker**, which sends it to the least loaded healthy
+instance of the service, protects every instance with a circuit breaker, and reroutes the request
+to another instance when a breaker trips. Events no longer go through RabbitMQ: a service publishes
+an event to the broker (`POST /publish`) without knowing who listens, and the broker delivers it to
+one instance of every service that registered the event's topic with Service Discovery
+(`POST /events/{topic}`). It keeps the events in a durable queue, retries failed deliveries and
+moves the ones that can never be delivered to its dead letters. Prometheus collects the broker's
+metrics and Grafana shows them. The gRPC calls between services are unchanged: they go straight to
+the instance the caller picks.
+
 What Lab 3 added is in orange. Each of the eight application services is configured to run as two replicas, drawn as two stacked boxes:
 each instance registers with Service Discovery, which checks its health and load every 5 seconds
 and alerts the developers' Telegram group when an instance goes down, recovers, reaches a critical
 load or is removed. Callers that look a service up in Service Discovery send each request to its
 next healthy instance in turn. CB marks a call guarded by a circuit breaker: when it trips, the
-caller removes that instance from Service Discovery. Dashed arrows are RabbitMQ events, from the
-service that publishes the event to the one that consumes it. The diagram's earlier pages, in the
-same file, keep the previous labs' versions.
+caller removes that instance from Service Discovery. Dashed arrows are events, from the service
+that publishes the event to the one that receives it; since Lab 4 every one of them goes through
+the Message Broker. The diagram's earlier pages, in the same file, keep the previous labs' versions -
+the Lab 3 architecture is the page before.
 
 New applicants can enter through any of Applicant Service, Credential Service or
 University Record Service. Whichever is contacted first mints the `applicant_id`,
@@ -223,9 +236,10 @@ Trade-off: heavier services and slower startup — acceptable, since nothing her
 | Direction | Protocol | Why |
 |---|---|---|
 | Client → system | REST + JSON via API gateway | Discrete actions (login, join shift, query record, submit verdict). One place to check the JWT. |
+| Gateway → service | REST through the Message Broker (`/forward/{service}/{path}`) | The broker picks the instance - least loaded, circuit breaker per instance, rerouted when one trips - so the Gateway knows only the service's name. |
 | Client → Discord DMs | WebSocket (Socket.IO) via Traefik | Persistent chat connections use port `8086`; sticky sessions and Redis support two replicas. |
 | Service → service, needs an answer | gRPC | Moderation makes 4 calls (Applicant, Credential, Record, Rules) before answering. The `.proto` is one contract both languages generate from, so Java and TS can't drift. |
-| Service → service, fire and forget | RabbitMQ events | `applicant_initialized`, `decision_made`, `shift_ended`. Publisher doesn't wait; a consumer being down doesn't fail the shift. |
+| Service → service, fire and forget | Message Broker topics (`POST /publish` → `POST /events/{topic}`) | `applicant_initialized`, `decision_made`, `shift_ended`. The publisher doesn't know who listens and doesn't wait; the broker stores the event and retries, so a consumer being down doesn't fail the shift. |
 | Discord replica ↔ Discord replica | Redis Pub/Sub (Socket.IO adapter) | Delivers room events between connected clients on different replicas. |
 
 ### Data management
@@ -2297,22 +2311,24 @@ The services register as `player-service`, `server-moderation-session-service`, 
   "port": 8081,
   "scheme": "http",
   "health_path": "/health",
-  "grpc_port": 9090
+  "grpc_port": 9090,
+  "topics": ["credential_initialized", "record_initialized"]
 }
 
 // Response 200 - "registered" for a new instance, "updated" for a heartbeat
 { "action": "registered", "instance": { "...": "as sent", "registered_at": "RFC3339", "healthy": false } }
 ```
 `instance_id` is the container's hostname and `host` its address, so callers reach that exact
-replica; `grpc_port` is optional. A new instance starts with `healthy: false` and gets traffic once
+replica; `grpc_port` is optional. `topics` (Lab 4, optional) are the events the Message Broker
+delivers to this service - an instance that only publishes lists none. A new instance starts with `healthy: false` and gets traffic once
 the first health check finds it UP, within 5 seconds. An instance that keeps renewing its
 registration comes back by itself after Service Discovery restarts, or after a caller's circuit
 breaker removed it.
 
 **Lookup**
 
-`GET /services/{service_name}` - every instance of the service, each with its `healthy` flag;
-callers only use the healthy ones. `404 SERVICE_NOT_FOUND` if none ever registered.
+`GET /services/{service_name}` - every instance of the service, each with its `healthy` flag, its
+`topics`, and the `health.utilization` its last health check found; callers only use the healthy ones. `404 SERVICE_NOT_FOUND` if none ever registered.
 `GET /services` lists every service.
 
 **Removal**
@@ -2344,6 +2360,85 @@ its state and its load:
 listening on `8000` inside the Compose network only. `GET /health` reports its own state: whether
 its health monitor runs, and how many services and instances it holds. A release is a `v*.*.*` Git
 tag on its `main`; the image carries the same version without the `v`.
+
+### Message Broker
+
+Lab 4. The internal component between the Gateway and the services, and between the services for
+events. The source is the [message broker repository](https://github.com/AnastasiaT18/pad-team-17-message-broker)
+(Python, Flask, a thread per request) - its README has the details. It is not reachable through the
+Gateway; on the Compose network it is `http://message-broker:8000`.
+
+**Requests from the Gateway**
+
+`GET|POST|PUT|PATCH|DELETE /forward/{service_name}/{path}` - the Gateway's request, sent on to one
+healthy instance of the service, whose answer comes back unchanged.
+
+- **Which instance** - the least loaded one: first the requests the broker has open to each
+  instance, then the `health.utilization` Service Discovery last measured. Equally loaded instances
+  take turns (round-robin).
+- **Circuit breaker** - every instance has its own: 3 failures within 17.5 s trip it, the broker
+  removes that instance from Service Discovery and stops calling it. A `502`, `503` or `504` from an
+  instance is a failure behind it, and does not count against it.
+- **High availability** - a request goes to the next instance when the first could not be reached,
+  and, for `GET`, `PUT` and `DELETE`, also when its failure tripped that instance's breaker. A `POST`
+  or `PATCH` that reached the instance is not sent again: it may already have been carried out.
+- Every attempt of one request shares a 4.5 s budget, inside the Gateway's 5 s.
+- Errors: `503 NO_HEALTHY_INSTANCES`, `503 CIRCUIT_OPEN`, `502 BACKEND_UNAVAILABLE`,
+  `504 BACKEND_TIMEOUT`.
+
+**Events between services**
+
+```json
+// POST /publish
+{ "topic": "applicant_initialized", "message_id": "uuid", "payload": { } }
+
+// Response 202
+{ "message_id": "uuid", "topic": "applicant_initialized", "subscribers": ["credential-service"], "duplicate": false }
+```
+- The publisher generates `message_id` and keeps it on every retry: the same id with the same
+  content is a duplicate and creates no new work.
+- `202` means the broker stored the event in its durable queue, one delivery per subscribing
+  service - not that it was handled. `503 NO_SUBSCRIBERS`, `503 DISCOVERY_UNAVAILABLE` and
+  `503 STORAGE_UNAVAILABLE` mean the publisher must try again; `422 VALIDATION_FAILED` and
+  `409 MESSAGE_ID_CONFLICT` that it never will be accepted.
+- The subscribers are every service that registered the topic in its `topics` list.
+
+The broker delivers the event to one instance of each subscriber, chosen like a forwarded request:
+```text
+POST /events/{topic}
+X-Message-Id: <message_id>
+
+<the payload>
+```
+| The service answers | The broker |
+|---|---|
+| `2xx` | done |
+| `408`, `429`, `5xx`, no answer | tries again after 1, 2, 4 and 8 s - 5 attempts in all |
+| any other `4xx` | moves it to the dead letters, no retry |
+
+After the last failed attempt the event is a dead letter too. Delivery is at least once: every
+service handles a repeated `X-Message-Id` safely, and answers only once the work is done. `/events`
+is internal - the Gateway has no route to it.
+
+| Topic | Published by | Delivered to |
+|---|---|---|
+| `applicant_initialized` | Applicant | Credential, University Record |
+| `credential_initialized` | Credential | Applicant, University Record |
+| `record_initialized` | University Record | Applicant, Credential |
+| `shift_ended` | Server Moderation Session | Player |
+| `decision_made` | Moderation | Server Moderation Session, University Record |
+
+The topics are the RabbitMQ routing keys of Lab 3, and the payloads did not change. RabbitMQ stays in
+the Compose file until every service publishes through the broker.
+
+**Logs and metrics**
+
+`GET /logs` downloads the broker's log file (`?tail=100` returns the last 100 lines). `GET /metrics`
+is in the Prometheus format: requests by status, events published and delivered, and for every
+instance its load, how often it was chosen and whether its circuit is open.
+
+**Running it:** image `anastasiatiganescu/message-broker` (`BROKER_VERSION`), `DISCOVERY_URL`
+pointing at Service Discovery, published on `localhost:8100` for `/health`, `/logs` and `/metrics`.
 
 ## Source submodules and Docker images
 
