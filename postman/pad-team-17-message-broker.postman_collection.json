@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Message Broker",
-    "description": "Message Broker - Team 17 \"Student ID, please\" (Lab 4).\n\nThe internal component between the Gateway and the services, and between the services for events. It is not routed through the Gateway, so these requests go to the broker directly, on the port the team's Compose file publishes (localhost:8100).\n\nCovers forwarding a request to the least loaded instance, publishing an event and its delivery to the subscribing service, the duplicate and error answers of /publish, the logs download and the metrics.\n\nRun the team's docker-compose.yml first. Requests are ordered to run start to finish: the event published in \"Events\" is checked on Credential Service at the end of that folder.",
+    "description": "Message Broker - Team 17 \"Student ID, please\" (Lab 4).\n\nThe internal component between the Gateway and the services, and between the services for events. It is not routed through the Gateway, so these requests go to the broker directly, on the port the team's Compose file publishes (localhost:8100).\n\nCovers forwarding a request to the least loaded instance, publishing an event and its delivery to the subscribing service, the duplicate and error answers of /publish, the topics, a dead letter, the logs download and the metrics.\n\nRun the team's docker-compose.yml first. Requests are ordered to run start to finish: the event published in \"Events\" is checked on Credential Service at the end of that folder, and the event refused in \"Topics and dead letters\" is found in the dead letters and counted in the metrics.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -480,6 +480,144 @@
       ]
     },
     {
+      "name": "Topics and dead letters",
+      "item": [
+        {
+          "name": "Topics - what the services subscribed to",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/topics",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "topics"
+              ]
+            },
+            "description": "Grade 7: every topic some registered instance listed in its Service Discovery registration, sorted, each once."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const topics = pm.response.json().topics;",
+                  "pm.test('Credential Service\\'s and Applicant Service\\'s topics are there', () => {",
+                  "  pm.expect(topics).to.include.members(['applicant_initialized', 'credential_initialized', 'record_initialized']);",
+                  "});",
+                  "pm.test('each topic once, sorted', () => pm.expect(topics).to.eql([...new Set(topics)].sort()));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish an event its subscriber can never handle",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{broker_url}}/publish",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "publish"
+              ]
+            },
+            "description": "Grade 9: an applicant_initialized without applicant_id and deception. The broker accepts it - it does not read payloads - but Credential Service answers 422, so the broker does not try again and moves the delivery to its dead letters.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"applicant_initialized\",\n  \"message_id\": \"{{dead_message_id}}\",\n  \"payload\": {\n    \"name\": \"No Identity\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('dead_message_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('Credential Service subscribed to the topic', () => pm.expect(pm.response.json().subscribers).to.include('credential-service'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dead letters - the event Credential Service refused",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/dead-letters",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "dead-letters"
+              ]
+            },
+            "description": "Grade 9: the deliveries that can never succeed, kept in the durable queue. Reading them does not retry or remove them."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Delivery happens in the background: give the broker a moment.",
+                  "setTimeout(() => {}, 3000);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const letter = pm.response.json().dead_letters",
+                  "  .find((d) => d.message_id === pm.collectionVariables.get('dead_message_id'));",
+                  "pm.test('the refused event is a dead letter', () => pm.expect(letter).to.be.an('object'));",
+                  "pm.test('for Credential Service, on the topic it was published on', () => {",
+                  "  pm.expect(letter.service).to.eql('credential-service');",
+                  "  pm.expect(letter.topic).to.eql('applicant_initialized');",
+                  "});",
+                  "pm.test('refused at once: one attempt, HTTP 422', () => {",
+                  "  pm.expect(letter.attempts).to.eql(1);",
+                  "  pm.expect(letter.last_error).to.eql('HTTP 422');",
+                  "});",
+                  "pm.test('the payload is kept as it was published', () => pm.expect(letter.payload).to.eql({ name: 'No Identity' }));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Metrics",
       "item": [
         {
@@ -511,7 +649,9 @@
                   "pm.test('the broker\\'s own load', () => pm.expect(text).to.include('service_utilization{'));",
                   "pm.test('requests routed to Applicant instances', () => pm.expect(text).to.match(/broker_routed_total\\{[^}]*backend=\"applicant-service\"/));",
                   "pm.test('the load of every instance', () => pm.expect(text).to.include('broker_backend_utilization{'));",
-                  "pm.test('events published', () => pm.expect(text).to.include('broker_events_published_total'));"
+                  "pm.test('events published', () => pm.expect(text).to.include('broker_events_published_total'));",
+                  "pm.test('the dead letter counted', () => pm.expect(text).to.match(/broker_event_deliveries_total\\{[^}]*result=\"dead\"\\} [1-9]/));",
+                  "pm.test('the queue of Applicant Service', () => pm.expect(text).to.match(/broker_queue_depth\\{[^}]*queue=\"applicant-service\"/));"
                 ]
               }
             }
@@ -535,6 +675,10 @@
     },
     {
       "key": "applicant_id",
+      "value": ""
+    },
+    {
+      "key": "dead_message_id",
       "value": ""
     }
   ]

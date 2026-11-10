@@ -2373,6 +2373,11 @@ Gateway; on the Compose network it is `http://message-broker:8000`.
 `GET|POST|PUT|PATCH|DELETE /forward/{service_name}/{path}` - the Gateway's request, sent on to one
 healthy instance of the service, whose answer comes back unchanged.
 
+- **Queue per service** - the request first waits in the queue of its service, and 8 worker threads
+  per service send the queued requests on. A service is never sent more forwarded requests at once
+  than that, and a slow service does not hold up the others. A full queue (50 waiting) answers
+  `503 QUEUE_FULL` at once; a request whose time ran out while it waited is not sent and gets
+  `504 QUEUE_TIMEOUT`.
 - **Which instance** - the least loaded one: first the requests the broker has open to each
   instance, then the `health.utilization` Service Discovery last measured. Equally loaded instances
   take turns (round-robin).
@@ -2382,9 +2387,10 @@ healthy instance of the service, whose answer comes back unchanged.
 - **High availability** - a request goes to the next instance when the first could not be reached,
   and, for `GET`, `PUT` and `DELETE`, also when its failure tripped that instance's breaker. A `POST`
   or `PATCH` that reached the instance is not sent again: it may already have been carried out.
-- Every attempt of one request shares a 4.5 s budget, inside the Gateway's 5 s.
-- Errors: `503 NO_HEALTHY_INSTANCES`, `503 CIRCUIT_OPEN`, `502 BACKEND_UNAVAILABLE`,
-  `504 BACKEND_TIMEOUT`.
+- The wait in the queue and every attempt of one request share a 4.5 s budget, inside the
+  Gateway's 5 s.
+- Errors: `503 QUEUE_FULL`, `504 QUEUE_TIMEOUT`, `503 NO_HEALTHY_INSTANCES`, `503 CIRCUIT_OPEN`,
+  `502 BACKEND_UNAVAILABLE`, `504 BACKEND_TIMEOUT`.
 
 **Events between services**
 
@@ -2431,19 +2437,36 @@ is internal - the Gateway has no route to it.
 The topics are the RabbitMQ routing keys of Lab 3, and the payloads did not change. RabbitMQ stays in
 the Compose file until every service publishes through the broker.
 
+**Topics and dead letters**
+
+```json
+// GET /topics - every topic a registered instance subscribed to, sorted, each once
+{ "topics": ["applicant_initialized", "credential_initialized", "record_initialized"] }
+
+// GET /dead-letters - the deliveries that will never be made, read from the durable queue
+{ "dead_letters": [{ "message_id": "uuid", "service": "credential-service", "topic": "applicant_initialized",
+                     "payload": { }, "attempts": 1, "last_error": "HTTP 422" }] }
+```
+`/topics` answers `503 DISCOVERY_UNAVAILABLE` when Service Discovery cannot be asked. Reading the
+dead letters does not retry or remove them. The durable queue is a SQLite file in the container
+(`EVENT_DB_PATH`, by default `data/events.db`).
+
 **Logs and metrics**
 
 `GET /logs` downloads the broker's log file (`?tail=100` returns the last 100 lines). `GET /metrics`
-is in the Prometheus format: requests by status, events published and delivered, and for every
-instance its load, how often it was chosen and whether its circuit is open.
+is in the Prometheus format: requests by status; events published, delivered, retried and dead;
+for every service queue its depth, waits, refusals and timeouts; and for every instance its load,
+how often it was chosen and whether its circuit is open.
 
 **Running it:** image `anastasiatiganescu/message-broker` (`BROKER_VERSION`), `DISCOVERY_URL`
-pointing at Service Discovery, published on `localhost:8100` for `/health`, `/logs` and `/metrics`.
+pointing at Service Discovery, published on `localhost:8100` for `/health`, `/logs`, `/metrics`,
+`/topics` and `/dead-letters`.
 
 **Postman:** [`postman/pad-team-17-message-broker.postman_collection.json`](postman/pad-team-17-message-broker.postman_collection.json)
 calls the broker directly on `localhost:8100`: forwarding to the least loaded replica, publishing an
 event (accepted, duplicate, conflicting `message_id`, invalid, no subscribers) and its delivery to
-Credential Service, the logs download and the metrics.
+Credential Service, the topics, an event Credential Service refused in the dead letters, the logs
+download and the metrics.
 
 ## Source submodules and Docker images
 
