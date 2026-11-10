@@ -1270,8 +1270,8 @@ The Gateway validates the `Authorization: Bearer <token>` header and does not fo
   "role": "string"
 }
 ```
-`deception` is stored internally and travels between the three applicant-side services over
-RabbitMQ, but it is never returned in any player-facing response, and it is not part of any gRPC
+`deception` is stored internally and travels between the three applicant-side services through
+the Message Broker, but it is never returned in any player-facing response, and it is not part of any gRPC
 message either — not even the one Moderation Service calls. It is the ground-truth answer the game
 is built around: a player who could read it would have nothing left to investigate, and a player
 who could infer it from what Moderation returns before submitting a verdict would have the same
@@ -1407,7 +1407,7 @@ message GetSessionStatusResponse { string status = 1; }
 `active` lets the applicant in, `created` and `ended` are `409 SESSION_NOT_ACTIVE`, and `NOT_FOUND` is
 `404 SESSION_NOT_FOUND`.
 
-**Events published (RabbitMQ)**
+**Events published (through the Message Broker, Lab 4)**
 
 `applicant_initialized` - published when Applicant Service is contacted first for a new applicant.
 ```json
@@ -1423,10 +1423,20 @@ message GetSessionStatusResponse { string status = 1; }
   "role": "string"
 }
 ```
-Consumed by Credential Service and University Record Service to build their own documents/records
-for this applicant, so all three stay in sync.
+Sent as `POST {BROKER_URL}/publish` with `topic`, `message_id` and the event as `payload`, once the
+applicant is committed and in the background; when the broker cannot be reached or answers `5xx`,
+the same message (same `message_id`) goes again after 1, 2 and 4 s. The service does not know who
+listens: the broker delivers it to every service that registered the topic - Credential Service and
+University Record Service, which build their own documents/records for this applicant, so all three
+stay in sync.
 
-**Events consumed (RabbitMQ)**
+**Events delivered here (through the Message Broker, Lab 4)**
+
+The broker sends every event whose topic this service registered (`credential_initialized`,
+`record_initialized`) to one replica, as `POST /events/{topic}` with the event as the body and its
+id in `X-Message-Id`. The answer tells the broker what to do next: `204` handled (a duplicate too),
+`400`/`404 UNKNOWN_TOPIC`/`422` never handleable (dead letter), `429`/`5xx` try again. `/events` is
+internal - the Gateway has no route to it.
 
 `credential_initialized` - published by Credential Service when it's contacted first instead.
 ```json
@@ -1471,13 +1481,23 @@ not routed through the Gateway.
   "status": "UP",
   "service": "applicant-service",
   "instance": "3f2a9c1b7d4e",
-  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "checks": { "database": "UP" },
   "load": { "active": 3, "max": 20, "utilization": 0.15 }
 }
 ```
 `load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
 1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
-threshold.
+threshold, and the one the Message Broker routes by. The broker is not a check: it is the broker
+that calls this instance, and a publish that fails is retried in the background.
+
+**Metrics (Lab 4)**
+
+`GET /actuator/prometheus` serves the instance's metrics for Prometheus, inside the Compose network
+only. Besides Spring Boot's own (REST requests, busy request workers, database connections, JVM),
+it counts the events published (`pad_events_publish_attempts_total`) and delivered here
+(`pad_events_received_total`), by `topic` and `result`, and times the gRPC calls answered and sent
+(`grpc_server_processing_duration_seconds`, `grpc_client_processing_duration_seconds`). Every series
+carries `application="applicant-service"`.
 
 **Service Discovery and replicas (Lab 3)**
 
@@ -1491,28 +1511,31 @@ Every replica registers on startup:
   "port": 8081,
   "scheme": "http",
   "health_path": "/health",
-  "grpc_port": 9090
+  "grpc_port": 9090,
+  "topics": ["credential_initialized", "record_initialized"]
 }
 ```
-`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
-exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
-instance removes itself (`DELETE /services/applicant-service/{instance_id}`) once it is DOWN and on
-shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
+`instance_id` is the container hostname and `host` the container's IP, so the Message Broker reaches
+that exact replica. `topics` are the events the broker delivers to this service (none with
+`MESSAGING_ENABLED=false`). The registration is renewed every `DISCOVERY_HEARTBEAT` while the
+instance is UP. The instance removes itself (`DELETE /services/applicant-service/{instance_id}`) once
+it is DOWN and on shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
 failed (`?reason=reported DOWN: database`), and Service Discovery passes that on in its alert.
 
-Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
-round-robin is visible from the client: two requests in a row to `/applicants` show two different ids.
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Message
+Broker's load balancing is visible from the client: while both replicas are equally busy, two
+requests in a row to `/applicants` show two different ids.
 
-The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
-them, so nothing depends on which replica a request or an event reaches. `applicant-service:9090`
-resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+The replicas share the database, and the Message Broker delivers each event to one of them, so
+nothing depends on which replica a request or an event reaches. `applicant-service:9090` resolves to
+every replica; each one's own gRPC address is in Service Discovery (`host`,
 `grpc_port`).
 
 **Shift check and circuit breaker (Lab 3)**
 
 Applicant Service's one synchronous call is the shift check above - `GetSessionStatus` over gRPC.
 `SESSION_DIRECTORY: grpc` in the Compose file turns it on; everything else the service learns from its
-peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
+peers arrives through the Message Broker. The call is guarded the way Lab 3 asks:
 
 - **Which instance** - the healthy Session instances Service Discovery lists, in turn (round-robin).
   While Discovery does not list the Session Service at all, the call goes to
@@ -1523,7 +1546,7 @@ peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
 - **Tripping** - 3 failures of one instance within `REQUEST_TIMEOUT` x 3.5 (17.5 s) trip its breaker:
   the trip is logged at ERROR, and the instance is removed from Service Discovery with
   `DELETE /services/server-moderation-session-service/{instance_id}?reason=circuit breaker of applicant-service tripped (3 failed calls within 17500 ms)`,
-  so the Gateway and every other caller stop using it and Discovery alerts the developers. This
+  so the Message Broker and every other caller stop using it and Discovery alerts the developers. This
   replica then leaves it alone for 17.5 s; after that the first success closes the breaker and the
   first failure trips it again.
 - **No instance answering** - `503 SESSION_SERVICE_UNAVAILABLE`.
@@ -1534,23 +1557,23 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:3.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.0.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
-   - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+   - `BROKER_URL` — the Message Broker's base URL (`http://message-broker:8000` in the team's Compose file)
+   - `MESSAGING_ENABLED` — set to `false` to run without the broker, for a Postman run: nothing is published and no topics are registered
    - `SESSION_DIRECTORY` — `grpc` checks shifts with Server Moderation Session Service, as the team's Compose file does; `mock`, the default, answers in its place for running the service alone (`MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS`)
    - `SESSION_SERVICE_NAME` (default `server-moderation-session-service`), `SESSION_GRPC_ADDRESS` (default `server-moderation-session-service:9090`), `SESSION_TIMEOUT` (default `2s`) — optional; where the Session Service is found and how long one instance gets to answer
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
    - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
    - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
-3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and the Message Broker.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`. The Compose file runs two replicas; the Message Broker finds them through Service Discovery and sends each request to the less busy one.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:3.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:4.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -1690,7 +1713,7 @@ message GetSessionStatusResponse { string status = 1; }
 `active` lets the applicant in, `created` and `ended` are `409 SESSION_NOT_ACTIVE`, and `NOT_FOUND` is
 `404 SESSION_NOT_FOUND`.
 
-**Events published (RabbitMQ)**
+**Events published (through the Message Broker, Lab 4)**
 
 `credential_initialized` - published when Credential Service is the first to be contacted for a new applicant.
 ```json
@@ -1705,10 +1728,19 @@ message GetSessionStatusResponse { string status = 1; }
   "course_registration": ["string"]
 }
 ```
-Consumed by Applicant Service and University Record Service to build their own data for this
-applicant.
+Sent as `POST {BROKER_URL}/publish` with `topic`, `message_id` and the event as `payload`, once the
+documents are committed and in the background; when the broker cannot be reached or answers `5xx`,
+the same message (same `message_id`) goes again after 1, 2 and 4 s. The service does not know who
+listens: the broker delivers it to every service that registered the topic - Applicant Service and
+University Record Service, which build their own data for this applicant.
 
-**Events consumed (RabbitMQ)**
+**Events delivered here (through the Message Broker, Lab 4)**
+
+The broker sends every event whose topic this service registered (`applicant_initialized`,
+`record_initialized`) to one replica, as `POST /events/{topic}` with the event as the body and its
+id in `X-Message-Id`. The answer tells the broker what to do next: `204` handled (a duplicate too),
+`400`/`404 UNKNOWN_TOPIC`/`422` never handleable (dead letter), `429`/`5xx` try again. `/events` is
+internal - the Gateway has no route to it.
 
 `applicant_initialized` - published by Applicant Service when it's contacted first instead.
 ```json
@@ -1753,13 +1785,23 @@ not routed through the Gateway.
   "status": "UP",
   "service": "credential-service",
   "instance": "3f2a9c1b7d4e",
-  "checks": { "database": "UP", "rabbitmq": "UP" },
+  "checks": { "database": "UP" },
   "load": { "active": 3, "max": 20, "utilization": 0.15 }
 }
 ```
 `load` is the share of the `MAX_CONCURRENT_REQUESTS` request workers that are busy: at `utilization`
 1.0 the next request gets `429`. It is the figure Service Discovery compares with its critical-load
-threshold.
+threshold, and the one the Message Broker routes by. The broker is not a check: it is the broker
+that calls this instance, and a publish that fails is retried in the background.
+
+**Metrics (Lab 4)**
+
+`GET /actuator/prometheus` serves the instance's metrics for Prometheus, inside the Compose network
+only. Besides Spring Boot's own (REST requests, busy request workers, database connections, JVM),
+it counts the events published (`pad_events_publish_attempts_total`) and delivered here
+(`pad_events_received_total`), by `topic` and `result`, and times the gRPC calls answered and sent
+(`grpc_server_processing_duration_seconds`, `grpc_client_processing_duration_seconds`). Every series
+carries `application="credential-service"`.
 
 **Service Discovery and replicas (Lab 3)**
 
@@ -1773,28 +1815,31 @@ Every replica registers on startup:
   "port": 8082,
   "scheme": "http",
   "health_path": "/health",
-  "grpc_port": 9090
+  "grpc_port": 9090,
+  "topics": ["applicant_initialized", "record_initialized"]
 }
 ```
-`instance_id` is the container hostname and `host` the container's IP, so the Gateway reaches that
-exact replica. The registration is renewed every `DISCOVERY_HEARTBEAT` while the instance is UP. The
-instance removes itself (`DELETE /services/credential-service/{instance_id}`) once it is DOWN and on
-shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
+`instance_id` is the container hostname and `host` the container's IP, so the Message Broker reaches
+that exact replica. `topics` are the events the broker delivers to this service (none with
+`MESSAGING_ENABLED=false`). The registration is renewed every `DISCOVERY_HEARTBEAT` while the
+instance is UP. The instance removes itself (`DELETE /services/credential-service/{instance_id}`) once
+it is DOWN and on shutdown, and registers again once it is back UP. When it is DOWN, the removal says which checks
 failed (`?reason=reported DOWN: database`), and Service Discovery passes that on in its alert.
 
-Every REST response names the replica that answered in an `X-Instance-Id` header, so the Gateway's
-round-robin is visible from the client: two requests in a row to `/credentials` show two different ids.
+Every REST response names the replica that answered in an `X-Instance-Id` header, so the Message
+Broker's load balancing is visible from the client: while both replicas are equally busy, two
+requests in a row to `/credentials` show two different ids.
 
-The replicas share the database, and RabbitMQ hands each event on the service's queue to one of
-them, so nothing depends on which replica a request or an event reaches. `credential-service:9090`
-resolves to every replica; each one's own gRPC address is in Service Discovery (`host`,
+The replicas share the database, and the Message Broker delivers each event to one of them, so
+nothing depends on which replica a request or an event reaches. `credential-service:9090` resolves to
+every replica; each one's own gRPC address is in Service Discovery (`host`,
 `grpc_port`).
 
 **Shift check and circuit breaker (Lab 3)**
 
 Credential Service's one synchronous call is the shift check above - `GetSessionStatus` over gRPC.
 `SESSION_DIRECTORY: grpc` in the Compose file turns it on; everything else the service learns from its
-peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
+peers arrives through the Message Broker. The call is guarded the way Lab 3 asks:
 
 - **Which instance** - the healthy Session instances Service Discovery lists, in turn (round-robin).
   While Discovery does not list the Session Service at all, the call goes to
@@ -1805,7 +1850,7 @@ peers arrives through RabbitMQ. The call is guarded the way Lab 3 asks:
 - **Tripping** - 3 failures of one instance within `REQUEST_TIMEOUT` x 3.5 (17.5 s) trip its breaker:
   the trip is logged at ERROR, and the instance is removed from Service Discovery with
   `DELETE /services/server-moderation-session-service/{instance_id}?reason=circuit breaker of credential-service tripped (3 failed calls within 17500 ms)`,
-  so the Gateway and every other caller stop using it and Discovery alerts the developers. This
+  so the Message Broker and every other caller stop using it and Discovery alerts the developers. This
   replica then leaves it alone for 17.5 s; after that the first success closes the breaker and the
   first failure trips it again.
 - **No instance answering** - `503 SESSION_SERVICE_UNAVAILABLE`.
@@ -1816,23 +1861,23 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:3.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.0.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
-   - `MESSAGING_ENABLED` — set to `false` to run without a broker, for a Postman run
+   - `BROKER_URL` — the Message Broker's base URL (`http://message-broker:8000` in the team's Compose file)
+   - `MESSAGING_ENABLED` — set to `false` to run without the broker, for a Postman run: nothing is published and no topics are registered
    - `SESSION_DIRECTORY` — `grpc` checks shifts with Server Moderation Session Service, as the team's Compose file does; `mock`, the default, answers in its place for running the service alone (`MOCK_ENDED_SESSIONS`, `MOCK_UNKNOWN_SESSIONS`)
    - `SESSION_SERVICE_NAME` (default `server-moderation-session-service`), `SESSION_GRPC_ADDRESS` (default `server-moderation-session-service:9090`), `SESSION_TIMEOUT` (default `2s`) — optional; where the Session Service is found and how long one instance gets to answer
    - `REQUEST_TIMEOUT` (default `5s`), `MAX_CONCURRENT_REQUESTS` (default `20`) — optional; the task timeout and concurrent task limit
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
    - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
    - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
-3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and the Message Broker.
 
-**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`. The Compose file runs two replicas; the Gateway finds them through Service Discovery and alternates between them.
+**Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`. The Compose file runs two replicas; the Message Broker finds them through Service Discovery and sends each request to the less busy one.
 
-**DockerHub:** `kutulin/pad-17-credential-service:3.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:4.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
