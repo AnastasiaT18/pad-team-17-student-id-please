@@ -2448,8 +2448,8 @@ the Compose file until every service publishes through the broker.
                      "payload": { }, "attempts": 1, "last_error": "HTTP 422" }] }
 ```
 `/topics` answers `503 DISCOVERY_UNAVAILABLE` when Service Discovery cannot be asked. Reading the
-dead letters does not retry or remove them. The durable queue is a SQLite file in the container
-(`EVENT_DB_PATH`, by default `data/events.db`).
+dead letters does not retry or remove them. The durable queue, dead letters included, is the SQLite
+file `EVENT_DB_PATH`, which Compose keeps in the `message-broker-data` volume.
 
 **Logs and metrics**
 
