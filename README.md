@@ -2505,8 +2505,8 @@ download and the metrics. The dead-letter request polls for up to 20 seconds and
 both the generated message ID and `credential-service`, since other subscribers can
 fail independently. Run the preceding invalid-publication request first. A timeout
 fails the check; it does not imply the event was handled. This scenario requires a
-Credential image that subscribes through the broker and rejects the invalid payload
-with HTTP 422.
+Credential image that subscribes through the broker and rejects the invalid payload:
+with HTTP 422 over REST, or `INVALID_ARGUMENT` over gRPC (Credential 4.0.0).
 
 ## Source submodules and Docker images
 
