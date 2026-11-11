@@ -844,7 +844,7 @@
     {
       "type": "timeseries",
       "title": "REST requests per replica",
-      "description": "Requests each replica answered per second (Spring Boot services).",
+      "description": "Requests each replica answered per second.",
       "id": 20,
       "datasource": {
         "type": "prometheus",
@@ -865,6 +865,16 @@
           "refId": "A",
           "expr": "sum by (application, instance) (rate(http_server_requests_seconds_count[1m]))",
           "legendFormat": "{{application}} {{instance}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (job, instance) (rate(http_requests_total{job=~\"university-record-service|server-rules-service\"}[1m]))",
+          "legendFormat": "{{job}} {{instance}}",
           "range": true
         }
       ],
@@ -892,7 +902,7 @@
     {
       "type": "timeseries",
       "title": "Busy request workers per replica",
-      "description": "The load a replica reports in /health, out of MAX_CONCURRENT_REQUESTS.",
+      "description": "REST requests a replica is handling right now - the load it reports in /health.",
       "id": 21,
       "datasource": {
         "type": "prometheus",
@@ -913,6 +923,16 @@
           "refId": "A",
           "expr": "executor_active_threads{name=\"requestExecutor\"}",
           "legendFormat": "{{application}} {{instance}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "rest_requests_in_flight{job=~\"university-record-service|server-rules-service\"}",
+          "legendFormat": "{{job}} {{instance}}",
           "range": true
         }
       ],

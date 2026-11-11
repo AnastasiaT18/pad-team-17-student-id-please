@@ -110,10 +110,11 @@ tracked separately and are not yet presented as passing.
 Grade 10. `docker compose up -d` also starts the monitoring; nothing else is needed.
 
 - **Prometheus** ([`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml))
-  collects the metrics every 5 s: `GET /metrics` of the Message Broker and of Service Discovery, and
-  `GET /actuator/prometheus` of **every replica** of Applicant and Credential. A replicated service is
-  found through Docker's DNS - its name resolves to all its replicas - so each replica is collected on
-  its own and shows up as its own `instance`. The data is kept for 7 days in `prometheus-data`.
+  collects the metrics every 5 s: `GET /metrics` of the Message Broker and of Service Discovery,
+  `GET /actuator/prometheus` of **every replica** of Applicant and Credential, and `GET /metrics` of
+  every replica of University Record and Server Rules. A replicated service is found through Docker's
+  DNS - its name resolves to all its replicas - so each replica is collected on its own and shows up as
+  its own `instance`. The data is kept for 7 days in `prometheus-data`.
 - **Alerts** ([`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)) - a target down
   for 30 s, a circuit breaker open, an instance above 80% load, a full queue, new dead letters. They are
   shown at `http://localhost:9091/alerts` and on the dashboard; Service Discovery's Telegram alerts
