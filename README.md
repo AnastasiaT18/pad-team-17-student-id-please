@@ -221,12 +221,14 @@ What Lab 4 added is in blue. The Gateway now only checks the JWT and lets throug
 routes; every request goes on to the **Message Broker**, which sends it to the least loaded healthy
 instance of the service, protects every instance with a circuit breaker, and reroutes the request
 to another instance when a breaker trips. Events no longer go through RabbitMQ: a service publishes
-an event to the broker (`POST /publish`) without knowing who listens, and the broker delivers it to
-one instance of every service that registered the event's topic with Service Discovery
-(`POST /events/{topic}`). It keeps the events in a durable queue, retries failed deliveries and
-moves the ones that can never be delivered to its dead letters. Prometheus collects the broker's
-metrics and Grafana shows them. The gRPC calls between services are unchanged: they go straight to
-the instance the caller picks.
+an event to the broker (`POST /publish`, or `Publish` over gRPC) without knowing who listens, and the
+broker delivers it to one instance of every service that registered the event's topic with Service
+Discovery (`Deliver` over gRPC to a service that implements it, `POST /events/{topic}` to the
+others). It keeps the events in a durable queue, retries failed deliveries and moves the ones that
+can never be delivered to its dead letters. Prometheus collects the metrics of the broker, Service
+Discovery and the services that expose them, Alloy sends the logs of every container to Loki, and
+Grafana shows both. The gRPC calls between services are unchanged: they go straight to the instance
+the caller picks.
 
 What Lab 3 added is in orange. Each of the eight application services is configured to run as two replicas, drawn as two stacked boxes:
 each instance registers with Service Discovery, which checks its health and load every 5 seconds
