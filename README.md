@@ -8,11 +8,11 @@ The system is split into 8 microservices, each owning a distinct piece of the ga
 
 ## Team 17
 - Anastasia Tiganescu, FAF-231 — Server Rules + University Record Services
-- Catalin Darzu, FAF-231  — Applicant and Credential Services
+- Catalin Darzu, FAF-231  — Applicant + Credential Services
 - Daniela Cojocari, FAF-231  — Moderation + Discord DMs Services
 - Janeta Grigoras, FAF-231  — Player + Server Moderation Session Services
 
-## Running the integrated stack (Lab 3)
+## Running the integrated stack (Labs 3–4)
 
 The **CPR repository** is the integration point. `docker-compose.yml` starts the eight application
 services (two replicas each), API Gateway, Message Broker, Service Discovery, PostgreSQL databases,
@@ -51,7 +51,7 @@ The Compose defaults for Pair 4 are:
 ```text
 MODERATION_VERSION=v0.4.0
 DISCORD_DMS_VERSION=v0.4.0
-DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.1.0
+DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.2.0
 ```
 
 The service-image tags are republished in place when new code reaches their respective `main`
@@ -1387,7 +1387,7 @@ The following two error responses apply to both `GET /rules` and `PUT /rules`:
 { "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
 ```
  
- ### Health, discovery and observability
+### Health, discovery and observability
 
  `GET /health` checks the database and reports the service name, instance
  hostname, database status, and REST/gRPC load. It returns `200` when the
@@ -1407,7 +1407,15 @@ The following two error responses apply to both `GET /rules` and `PUT /rules`:
  SERVICE_HTTP_PORT=8080
  SERVICE_GRPC_PORT=9090
  SERVICE_HEARTBEAT_SECONDS=15
+ SERVICE_TOPICS=
  ```
+
+**Logs, metrics and topics (Lab 4).** `GET /logs` downloads the current log file (`?tail=N` returns
+the last N lines) and `GET /metrics` exposes Prometheus text-format metrics (request counts, durations
+and load). Neither goes through the Gateway: reach them through the Message Broker, e.g.
+`GET http://localhost:8100/forward/server-rules-service/logs`. `/health` and `/metrics` are not counted
+against the concurrent request limit. The instance registers `SERVICE_TOPICS` with Service Discovery;
+it is empty, because Server Rules neither publishes nor subscribes to events.
 
  ### Timeout and concurrency limit
 
@@ -1447,17 +1455,18 @@ No events published or consumed — Server Rules Service doesn't participate in 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.3.0`
+1. Pull the public image — `docker pull anastasiatiganescu/server-rules-service:v0.4.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
+   - `SERVICE_TOPICS` (optional, default empty)
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
 
 **Ports:** REST and gRPC use ports `8080` and `9090` inside the Compose
 network. Neither port is published directly in the shared stack; client
 requests go through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/server-rules-service:v0.3.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/server-rules-service:v0.4.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -1470,11 +1479,14 @@ instance exposes `GET /health`, writes structured logs, registers with Service
 Discovery on startup, refreshes its registration through heartbeats, and
 removes failing Session Service instances after the circuit-breaker threshold.
 
+Lab 4 – Events now go through the Message Broker instead of RabbitMQ. The service also serves
+`GET /logs` and `GET /metrics` (through the broker, like Server Rules) and registers its topics.
+
 ### Health and logging
 
 `GET /health` is used by Service Discovery and the Gateway. It returns `200`
 when the database is available and `503` when the database is unavailable. The
-response includes the instance hostname, database and RabbitMQ checks, and
+response includes the instance hostname, database check, and
 REST/gRPC load:
 
 ```json
@@ -1482,7 +1494,7 @@ REST/gRPC load:
   "status": "UP",
   "service": "university-record-service",
   "instance": "container-id",
-  "checks": { "database": "up", "rabbitmq": "up" },
+  "checks": { "database": "up" },
   "load": {
     "rest": { "active": 0, "max": 20 },
     "grpc": { "active": 0, "max": 20 },
@@ -1491,10 +1503,8 @@ REST/gRPC load:
 }
 ```
 
-Only the database determines the overall health status. A RabbitMQ failure is
-reported and logged, but does not by itself change the service status to
-`DOWN`. The service logs request start/completion, status, duration, business
-events, RabbitMQ processing, gRPC calls, upstream Session Service failures,
+The database determines the overall health status. The service logs request
+start/completion, status, duration, business events, event processing, gRPC calls, upstream Session Service failures,
 instance removals, discovery registration, and concurrency-limit rejections.
 Requests preserve an incoming `X-Request-Id` or generate one and include it in
 the response and correlated log entries.
@@ -1517,9 +1527,11 @@ SERVICE_NAME=university-record-service
 SERVICE_HTTP_PORT=8080
 SERVICE_GRPC_PORT=9090
 SERVICE_HEARTBEAT_SECONDS=15
+BROKER_URL=http://message-broker:8000
+SERVICE_TOPICS=applicant_initialized,credential_initialized,decision_made
 ```
 
-Replicas share PostgreSQL and RabbitMQ, use the container `HOSTNAME` as their
+Replicas share PostgreSQL, use the container `HOSTNAME` as their
 unique identity, and must not publish a fixed host port.
 
 **Client-facing REST (via API Gateway)**
@@ -1606,9 +1618,13 @@ Idempotent per `(session_id, player_id)` — a repeated call for the same pair r
 `GetRecordSnapshot` — called by Moderation Service. Returns the full, unfiltered record regardless of player scopes; `NOT_FOUND` if the applicant has no record. See Moderation Service below for the message shapes.
 
 
-**Events (RabbitMQ)**
+**Events (Message Broker)**
 
-All Team 17 services use one shared topic exchange, `pad17.events`; routing keys are the event names.
+The service publishes events with `POST /publish` on the Message Broker (`BROKER_URL`) and does not
+know who receives them. It registers the topics it wants in `SERVICE_TOPICS`; the broker delivers each
+one to a single instance with `POST /events/{topic}` and an `X-Message-Id` header. The service answers
+`2xx` only after the work is done and handles a repeated `X-Message-Id` safely. Topic names are the
+old routing keys and the payloads did not change.
 
 `record_initialized` - published when University Record Service is the first to be contacted for a new applicant.
 ```json
@@ -1627,24 +1643,26 @@ Consumed by Applicant Service and Credential Service.
 
 `applicant_initialized` and `credential_initialized` (consumed) - published by Applicant Service / Credential Service when they are contacted first instead; payloads as in those services' sections above. University Record Service builds its records from whichever event arrives, if it wasn't the one that initialized the applicant. Idempotent on `applicant_id`.
 
-Not yet consuming `decision_made`, so `previously_banned` isn't updated when a Moderator bans an applicant. Planned for a future lab.
+`decision_made` is consumed from the Message Broker. When a Moderator bans an applicant,
+`previously_banned` is updated.
 
 
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.3.0`
+1. Pull the public image — `docker pull anastasiatiganescu/university-record-service:v0.4.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
-   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD`
-3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and RabbitMQ.
+   - `BROKER_URL` (default `http://message-broker:8000`)
+   - `SERVICE_TOPICS` (default `applicant_initialized,credential_initialized,decision_made`)
+3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and the Message Broker.
 
 **Ports:** gRPC uses port `9090` inside the container. The shared Compose
 configuration does not publish a fixed host port for scaled instances; client
 requests go through the Gateway (`localhost:8090`).
 
-**DockerHub:** `anastasiatiganescu/university-record-service:v0.3.0` (public, `linux/amd64` + `linux/arm64`)
+**DockerHub:** `anastasiatiganescu/university-record-service:v0.4.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
@@ -2356,15 +2374,17 @@ its state and its load:
   from @BotFather; the group's id is in the bot's `getUpdates` once it is in the group - the steps
   are in Service Discovery's README). The token is a secret: `.env` only, never git.
 
-**Running it:** image `dannacojocari/pad-team-17-discovery-service:0.1.0` (`DISCOVERY_IMAGE`),
+**Running it:** image `dannacojocari/pad-team-17-discovery-service:0.2.0` (`DISCOVERY_IMAGE`),
 listening on `8000` inside the Compose network only. `GET /health` reports its own state: whether
-its health monitor runs, and how many services and instances it holds. A release is a `v*.*.*` Git
+its health monitor runs, and how many services and instances it holds. `GET /logs` downloads its log
+file and `GET /metrics` exposes Prometheus metrics; both are internal. A release is a `v*.*.*` Git
 tag on its `main`; the image carries the same version without the `v`.
 
 ### Message Broker
 
 Lab 4. The internal component between the Gateway and the services, and between the services for
 events. The source is the [message broker repository](https://github.com/AnastasiaT18/pad-team-17-message-broker)
+(submodule `services/message-broker`)
 (Python, Flask, a thread per request) - its README has the details. It is not reachable through the
 Gateway; on the Compose network it is `http://message-broker:8000`.
 
@@ -2496,7 +2516,7 @@ The service directories under `services/` are **Git submodules**. CPR records th
 for each dependency; it does not vendor its contents. To inspect a service's source, run:
 
 ```bash
-git submodule update --init services/moderation-service services/discord-dms-service services/discovery-service
+git submodule update --init services/moderation-service services/discord-dms-service services/discovery-service services/message-broker
 ```
 
 To change the pinned versions, use a CPR feature branch, fetch each submodule's `main`, check
@@ -2508,6 +2528,7 @@ The Pair 4 source repositories are:
 - [`DannaCojocari/moderation-service`](https://github.com/DannaCojocari/moderation-service)
 - [`DannaCojocari/discord-dms-service`](https://github.com/DannaCojocari/discord-dms-service)
 - [`DannaCojocari/pad-team-17-discovery-service`](https://github.com/DannaCojocari/pad-team-17-discovery-service)
+- [`AnastasiaT18/pad-team-17-message-broker`](https://github.com/AnastasiaT18/pad-team-17-message-broker) (submodule `services/message-broker`)
 
 A new `main` commit in a source repository does not automatically change the CPR submodule pointer.
 Similarly, updating the gitlink does not automatically pull its published Docker image. To get
@@ -2577,6 +2598,7 @@ Semantic versioning, tagged on `main` after each lab is presented:
 v0.1.0   Lab 0 — planning and contract
 v0.2.0   Lab 1 — first running services
 v0.3.0   Lab 2 — Gateway introduced
+v0.4.0   Lab 4 — Message Broker, logs and metrics, topics
 ```
 
 Service repositories are tagged independently once they publish images; the CPR tag records
