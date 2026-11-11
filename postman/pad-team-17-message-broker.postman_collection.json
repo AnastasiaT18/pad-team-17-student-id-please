@@ -578,7 +578,7 @@
                 "dead-letters"
               ]
             },
-            "description": "Grade 9: poll for up to 20 seconds for this message and Credential Service together. Other subscribers may fail independently. Reading dead letters does not retry or remove them. The scenario requires Credential Service to reject this payload with HTTP 422."
+            "description": "Grade 9: poll for up to 20 seconds for this message and Credential Service together. Other subscribers may fail independently. Reading dead letters does not retry or remove them. The scenario requires Credential Service to reject this payload: HTTP 422 over REST, INVALID_ARGUMENT over gRPC."
           },
           "response": [],
           "event": [
@@ -627,9 +627,9 @@
                   "    pm.expect(letter.service).to.eql(subscriber);",
                   "    pm.expect(letter.topic).to.eql('applicant_initialized');",
                   "  });",
-                  "  pm.test('refused at once: one attempt, HTTP 422', () => {",
+                  "  pm.test('refused at once: one attempt, 422 over REST or INVALID_ARGUMENT over gRPC', () => {",
                   "    pm.expect(letter.attempts).to.eql(1);",
-                  "    pm.expect(letter.last_error).to.eql('HTTP 422');",
+                  "    pm.expect(letter.last_error).to.be.oneOf(['HTTP 422', 'gRPC INVALID_ARGUMENT']);",
                   "  });",
                   "  pm.test('the payload is kept as published', () => pm.expect(letter.payload).to.eql({ name: 'No Identity' }));",
                   "}",

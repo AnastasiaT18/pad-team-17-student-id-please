@@ -2498,6 +2498,23 @@ After the last failed attempt the event is a dead letter too. Delivery is at lea
 service handles a repeated `X-Message-Id` safely, and answers only once the work is done. `/events`
 is internal - the Gateway has no route to it.
 
+**Events over gRPC (Grade 8)**
+
+Both hops can also be gRPC. The contract is `proto/message_broker.proto` in the broker's repository;
+the broker's gRPC server is `message-broker:9090` on the Compose network.
+
+- **Publishing** - `MessageBroker.Publish` with `topic`, `message_id` and `payload_json` (the payload
+  as a JSON object) does what `POST /publish` does: the same checks, queue and duplicate detection.
+  `INVALID_ARGUMENT` and `ALREADY_EXISTS` mean it will never be accepted, `UNAVAILABLE` (no subscriber,
+  Discovery or storage unavailable) that the publisher must try again.
+- **Delivering** - an instance that registered a `grpc_port` with Service Discovery gets its events
+  with `EventSubscriber.Deliver` on that port, chosen and protected like a REST delivery. `OK` is done;
+  `INVALID_ARGUMENT`, `NOT_FOUND` or `FAILED_PRECONDITION` sends it to the dead letters;
+  `UNAVAILABLE`, `INTERNAL`, `DEADLINE_EXCEEDED` or `RESOURCE_EXHAUSTED` is tried again.
+- An instance without a `grpc_port`, or whose gRPC server does not implement `EventSubscriber`
+  (`UNIMPLEMENTED`), gets `POST /events/{topic}` as above, so every service can move to gRPC on its
+  own. Applicant and Credential (4.0.0) publish and receive over gRPC.
+
 | Topic | Published by | Delivered to |
 |---|---|---|
 | `applicant_initialized` | Applicant | Credential, University Record |
@@ -2527,12 +2544,13 @@ file `EVENT_DB_PATH`, which Compose keeps in the `message-broker-data` volume.
 
 `GET /logs` downloads the broker's log file (`?tail=100` returns the last 100 lines). `GET /metrics`
 is in the Prometheus format: requests by status; events published, delivered, retried and dead;
-for every service queue its depth, waits, refusals and timeouts; and for every instance its load,
-how often it was chosen and whether its circuit is open.
+for every service queue its depth, waits, refusals and timeouts; for every instance its load,
+how often it was chosen and whether its circuit is open; and how many publish requests and delivery
+attempts went over gRPC and over REST (`transport`).
 
 **Running it:** image `anastasiatiganescu/message-broker` (`BROKER_VERSION`), `DISCOVERY_URL`
 pointing at Service Discovery, published on `localhost:8100` for `/health`, `/logs`, `/metrics`,
-`/topics` and `/dead-letters`.
+`/topics` and `/dead-letters`. Its gRPC port 9090 is reachable only inside the Compose network.
 
 **Grade 9 durable storage:** Compose sets `EVENT_DB_PATH=/data/events.db` and mounts
 `message-broker-data` at `/data`. The database and SQLite journal files therefore
@@ -2559,8 +2577,8 @@ download and the metrics. The dead-letter request polls for up to 20 seconds and
 both the generated message ID and `credential-service`, since other subscribers can
 fail independently. Run the preceding invalid-publication request first. A timeout
 fails the check; it does not imply the event was handled. This scenario requires a
-Credential image that subscribes through the broker and rejects the invalid payload
-with HTTP 422.
+Credential image that subscribes through the broker and rejects the invalid payload:
+with HTTP 422 over REST, or `INVALID_ARGUMENT` over gRPC (Credential 4.0.0).
 
 ## Source submodules and Docker images
 
