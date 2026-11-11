@@ -39,8 +39,8 @@ docker compose ps
 | API Gateway | `http://localhost:8090` | Authenticated REST API for clients and Postman |
 | Message Broker | `http://localhost:8100` | `GET /health`, `GET /logs`, `GET /metrics` - internal otherwise, see [Message Broker](#message-broker) |
 | Discord DMs reverse proxy | `http://localhost:8086` | Socket.IO connections and Discord health checks |
-| Grafana | `http://localhost:3001` | The monitoring dashboard - see [Monitoring](#monitoring-prometheus-and-grafana-lab-4) |
-| Prometheus | `http://localhost:9091` | What is collected (`Status -> Targets`) and queries |
+| Grafana | `http://localhost:3001` | The monitoring dashboard: metrics and logs - see [Monitoring](#monitoring-prometheus-loki-and-grafana-lab-4) |
+| Prometheus | `http://localhost:9091` | What is collected (`/targets`), the alerts (`/alerts`) and queries |
 | RabbitMQ management | `http://localhost:15672` | Broker administration (credentials from `.env`) |
 | Service Discovery | `http://discovery-service:8000` inside Compose | Internal registration, lookup, and health monitoring; not exposed on the host |
 
@@ -105,28 +105,37 @@ and [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team
 Their existing API checks remain useful; dedicated Lab 3 failover and cross-replica tests are
 tracked separately and are not yet presented as passing.
 
-### Monitoring: Prometheus and Grafana (Lab 4)
+### Monitoring: Prometheus, Loki and Grafana (Lab 4)
 
-Grade 10. `docker compose up -d` also starts Prometheus and Grafana; nothing else is needed.
+Grade 10. `docker compose up -d` also starts the monitoring; nothing else is needed.
 
 - **Prometheus** ([`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml))
-  collects the metrics every 5 s: `GET /metrics` of the Message Broker (and of Service Discovery,
-  once its image with `/metrics` is published), and `GET /actuator/prometheus` of **every replica** of
-  Applicant and Credential. A replicated service is found through Docker's DNS - its name resolves to
-  all its replicas - so each replica is collected on its own and shows up as its own `instance`.
-  The data is kept for 7 days in the `prometheus-data` volume.
+  collects the metrics every 5 s: `GET /metrics` of the Message Broker and of Service Discovery, and
+  `GET /actuator/prometheus` of **every replica** of Applicant and Credential. A replicated service is
+  found through Docker's DNS - its name resolves to all its replicas - so each replica is collected on
+  its own and shows up as its own `instance`. The data is kept for 7 days in `prometheus-data`.
+- **Alerts** ([`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)) - a target down
+  for 30 s, a circuit breaker open, an instance above 80% load, a full queue, new dead letters. They are
+  shown at `http://localhost:9091/alerts` and on the dashboard; Service Discovery's Telegram alerts
+  stay the ones that notify the team.
+- **Logs** - Grafana Alloy ([`monitoring/alloy/config.alloy`](monitoring/alloy/config.alloy)) reads what
+  every container of this Compose project writes, through the Docker socket (read-only), and sends it
+  to **Loki** ([`monitoring/loki/loki.yml`](monitoring/loki/loki.yml)), labelled with the Compose
+  `service` and the `container`. No service has to change for its logs to be collected. They are kept
+  for 7 days in `loki-data`.
 - **Grafana** opens on the dashboard *PAD Team 17 - Student ID, please*, read-only and without a
-  login. The data source and the dashboard
+  login. The data sources and the dashboard
   ([`monitoring/grafana/dashboards/pad-team-17.json`](monitoring/grafana/dashboards/pad-team-17.json))
   are created when Grafana starts; edit the file, not the dashboard in the UI. The admin login is
-  `admin` / `GRAFANA_ADMIN_PASSWORD` from `.env`.
+  `admin` / `GRAFANA_ADMIN_PASSWORD` from `.env`. *Explore* queries any metric or log.
 
 | Dashboard row | What it shows |
 |---|---|
-| Overview | every target Prometheus collects, `UP` or `DOWN` |
+| Overview | every target Prometheus collects, `UP` or `DOWN`; instances registered in Service Discovery and how many are healthy; the alerts firing now |
 | Message Broker - requests | requests sent to each instance (load balancing), the load each instance reported, open circuit breakers, queue depth, refusals and timeouts, answers by status |
 | Message Broker - events | events published, delivered, retried and dead; publications without a subscriber; publish requests and delivery attempts over gRPC and over REST (Grade 8) |
 | Services | REST requests and busy request workers per replica, events received and published by topic and result, gRPC calls per replica |
+| Logs | the broker's decisions (least loaded instance, circuit breakers, reroutes, dead letters), errors and warnings per service per minute, and those lines themselves |
 
 A service whose owner adds metrics needs one job in `prometheus.yml` - its Compose service name, the
 port it listens on inside the network, and the path of its metrics:
@@ -141,7 +150,9 @@ port it listens on inside the network, and the path of its metrics:
 ```
 
 To check it works: `http://localhost:9091/targets` lists every target and its last scrape; on the
-dashboard, a few requests through the Gateway appear within 10 s.
+dashboard, a few requests through the Gateway appear within 10 s, and their log lines in the Logs row.
+In *Explore* with Loki, `{service="applicant-service"}` shows the logs of both Applicant replicas, each
+line with its `container`.
 
 ---
 

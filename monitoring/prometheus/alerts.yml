@@ -1,0 +1,41 @@
+# What Prometheus watches for. The alerts are shown at http://localhost:9091/alerts and on the Grafana
+# dashboard; nothing is sent anywhere (Service Discovery already alerts the team on Telegram).
+groups:
+  - name: pad-team-17
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} {{ $labels.instance }} has not answered Prometheus for 30 s"
+
+      - alert: CircuitBreakerOpen
+        expr: broker_circuit_open == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "The broker's circuit breaker for {{ $labels.target }} is open: requests go to the other instances"
+
+      - alert: InstanceHighLoad
+        expr: broker_backend_utilization > 0.8
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.target }} reports more than 80% of its request workers busy"
+
+      - alert: QueueRefusingRequests
+        expr: increase(broker_queue_rejected_total[1m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The broker's queue for {{ $labels.queue }} is full and answers 503 QUEUE_FULL"
+
+      - alert: DeadLetters
+        expr: increase(broker_event_deliveries_total{result="dead"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Events went to the dead letters in the last 5 minutes - see GET /dead-letters"

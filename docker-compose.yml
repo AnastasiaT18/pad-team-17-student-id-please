@@ -473,8 +473,9 @@ services:
       - discord-dms-service
 
   # ---------------------------------------------------------------- monitoring (Lab 4, Grade 10)
-  # Prometheus collects the metrics every 5 s (monitoring/prometheus/prometheus.yml); Grafana shows
-  # them on the dashboard in monitoring/grafana/dashboards, set up when it starts.
+  # Prometheus collects the metrics every 5 s (monitoring/prometheus), Alloy sends the logs of every
+  # container to Loki (monitoring/alloy, monitoring/loki), and Grafana shows both on the dashboard in
+  # monitoring/grafana/dashboards, set up when it starts.
   prometheus:
     image: prom/prometheus:v3.16.0
     container_name: pad17-prometheus
@@ -484,6 +485,7 @@ services:
       - "--storage.tsdb.retention.time=7d"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     depends_on:
       - message-broker
@@ -506,8 +508,31 @@ services:
       - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+      - loki
     ports:
       - "3001:3000"
+
+  loki:
+    image: grafana/loki:3.7.9
+    container_name: pad17-loki
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.21.3
+    container_name: pad17-alloy
+    command: ["run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy/data"]
+    environment:
+      # Only the containers of this Compose project have their logs collected.
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only: Alloy lists the containers and reads their output, it changes nothing.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
 
 volumes:
   message-broker-data:
@@ -522,3 +547,4 @@ volumes:
   discord-dms-db-data:
   prometheus-data:
   grafana-data:
+  loki-data:

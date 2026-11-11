@@ -8,13 +8,17 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+# Conditions worth knowing about: a target down, a circuit breaker open, a full queue, dead letters.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   # Requests, routing between instances, circuit breakers, queues, events, gRPC vs REST.
   - job_name: message-broker
     static_configs:
       - targets: ["message-broker:8000"]
 
-  # Registrations and health checks; up once the Discovery image with GET /metrics is published.
+  # Registered services and how many of their instances are healthy (from Discovery 0.2.0 on).
   - job_name: discovery-service
     static_configs:
       - targets: ["discovery-service:8000"]
