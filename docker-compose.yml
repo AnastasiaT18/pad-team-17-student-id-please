@@ -326,7 +326,7 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.3.0}
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.4.0}
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
@@ -345,15 +345,11 @@ services:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.3.0}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.4.0}
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
       DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
       DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USERNAME: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_NAME: university-record-service
       SERVICE_HTTP_PORT: 8080
@@ -366,7 +362,7 @@ services:
     depends_on:
       university-record-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker: 
         condition: service_healthy
       discovery-service:
         condition: service_healthy
