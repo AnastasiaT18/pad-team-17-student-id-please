@@ -199,7 +199,7 @@ services:
       
  # ---------------------------------------------------------------- discovery
   discovery-service:
-    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
+    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.2.0}
     container_name: pad17-discovery-service
     environment:
       # Health alerts also go to the developers' Telegram group, posted by the team's bot. The bot's

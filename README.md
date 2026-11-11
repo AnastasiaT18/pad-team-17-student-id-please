@@ -1408,7 +1408,6 @@ Holds no applicant data — evaluates whatever it's handed, per request.
 }
 ```
 
-`PUT /rules` - replace the active rule set (Moderator only, between shifts)
 ```json
 // Request
 {
@@ -1471,12 +1470,21 @@ and load). Neither goes through the Gateway: reach them through the Message Brok
 against the concurrent request limit. The instance registers `SERVICE_TOPICS` with Service Discovery;
 it is empty, because Server Rules neither publishes nor subscribes to events.
 
+Public REST requests follow Gateway → Message Broker → one healthy Server Rules replica.
+The broker selects by load, using round-robin for equally loaded instances, and owns the
+forwarding circuit breakers and safe rerouting. Business HTTP responses include `X-Instance-Id`
+from the container `HOSTNAME`, matching Discovery registration, and preserve `X-Request-Id`.
+`EvaluateApplicant` remains a direct internal gRPC call; Server Rules needs no broker event
+subscriber while its topic list is empty.
+
  ### Timeout and concurrency limit
 
 - **Task timeout: 5 seconds.** Both REST handlers return a `Callable`, so a slower request is answered with `504 REQUEST_TIMEOUT` (`spring.mvc.async.request-timeout=5000`).
 - **Concurrent task limit: 20 requests in flight.** The 21st gets `429 TOO_MANY_REQUESTS` immediately. `ConcurrencyLimitFilter` holds a slot until the async request completes.
 
-These limits cover the REST API and the gRPC `EvaluateApplicant` endpoint.
+The REST and gRPC limits use separate counters. `EvaluateApplicant` has a default limit of
+20 concurrent calls and a 5-second deadline; gRPC rejections use `RESOURCE_EXHAUSTED` and
+`DEADLINE_EXCEEDED`, rather than HTTP status codes.
 
 ### Rule condition format
 
@@ -1524,21 +1532,26 @@ requests go through the Gateway (`localhost:8090`).
 
 **Source code / build details:** private repo `pad-team-17-server-rules-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
 
+**Postman:** [Server Rules collection](postman/pad-team-17-server-rules.postman_collection.json).
+It covers public REST behavior, replica headers, logs and metrics. It does not exercise
+`EvaluateApplicant`; test that method separately over internal gRPC. Exact replica alternation
+is expected only when the broker sees equally loaded instances.
+
 ---
 
 ### University Record Service
 
-Lab 3 – Scaling Up. Multiple instances can run behind the Gateway. Each
-instance exposes `GET /health`, writes structured logs, registers with Service
-Discovery on startup, refreshes its registration through heartbeats, and
-removes failing Session Service instances after the circuit-breaker threshold.
+Lab 4 – Public REST requests follow Gateway → Message Broker → one healthy replica. The broker
+balances by load, uses round-robin for ties, and owns incoming request circuit breakers and safe
+rerouting. Replicas share PostgreSQL and register independently with Service Discovery.
 
-Lab 4 – Events now go through the Message Broker instead of RabbitMQ. The service also serves
-`GET /logs` and `GET /metrics` (through the broker, like Server Rules) and registers its topics.
+University Record publishes and receives broker events over gRPC, retains REST event delivery
+for compatibility, and exposes `GET /logs` and `GET /metrics`. Its outgoing Session Service gRPC
+calls retain their own instance selection and circuit breakers.
 
 ### Health and logging
 
-`GET /health` is used by Service Discovery and the Gateway. It returns `200`
+`GET /health` is polled by Service Discovery; the broker uses the resulting health and load metadata. It returns `200`
 when the database is available and `503` when the database is unavailable. The
 response includes the instance hostname, database check, and
 REST/gRPC load:
@@ -1561,13 +1574,14 @@ The database determines the overall health status. The service logs request
 start/completion, status, duration, business events, event processing, gRPC calls, upstream Session Service failures,
 instance removals, discovery registration, and concurrency-limit rejections.
 Requests preserve an incoming `X-Request-Id` or generate one and include it in
-the response and correlated log entries.
+the response and correlated log entries. Business HTTP responses also include `X-Instance-Id`
+from the container `HOSTNAME`, including responses from asynchronous REST controllers.
 
 ### Service Discovery registration
 
 At startup, each instance sends `POST /register` to Service Discovery with its
 service name, container `HOSTNAME` instance ID, resolved host address, internal
-HTTP port, internal gRPC port, and `/health` path. Registration retries with
+HTTP port, internal gRPC port, `/health` path, and subscribed topics. Registration retries with
 backoff if Discovery is unavailable and repeats every 15 seconds by default as
 a heartbeat. During graceful shutdown, the instance deregisters with
 `DELETE /services/{serviceName}/{instanceId}`. A crashed instance stops sending
@@ -1581,7 +1595,9 @@ SERVICE_NAME=university-record-service
 SERVICE_HTTP_PORT=8080
 SERVICE_GRPC_PORT=9090
 SERVICE_HEARTBEAT_SECONDS=15
-BROKER_URL=http://message-broker:8000
+BROKER_GRPC_TARGET=message-broker:9090
+BROKER_GRPC_DEADLINE_MS=3000
+SESSION_CLIENT=grpc
 SERVICE_TOPICS=applicant_initialized,credential_initialized,decision_made
 ```
 
@@ -1593,7 +1609,9 @@ unique identity, and must not publish a fixed host port.
 The Gateway validates the `Authorization: Bearer <token>` header and does not forward it. It adds `X-Player-Id: <player id>` (the token's `sub` claim), replacing any value a client sends. This service never sees a token; its REST port is not published in the shared stack.
 
 
-`POST /records` - generate ground-truth records for a new applicant, when University Record Service is the first of the three applicant-side services to be contacted. It mints the applicant_id and the deception, then propagates both through record_initialized.
+`POST /records` - generate ground-truth records for a new applicant, when University Record Service is the first of the three applicant-side services to be contacted. It generates the applicant ID and publishes `record_initialized`. The current implementation uses
+placeholder values: enrolled, year 2, courses `["PAD"]`, deception `none`, name `Test Applicant`,
+and student ID `S000000`.
 ```json
 // Request
 { "session_id": "uuid" }
@@ -1613,7 +1631,12 @@ The Gateway validates the `Authorization: Bearer <token>` header and does not fo
 // Response 422 — session_id is missing or blank
 { "error": { "code": "VALIDATION_FAILED", "message": "human text" } }
 ```
-The session is not verified yet (`404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTIVE` are planned for a future lab).
+With `SESSION_CLIENT=grpc` (as configured in Compose), the service validates the session through
+`SessionService.GetSessionStatus`: an unknown session returns `404 SESSION_NOT_FOUND`, and an
+inactive session returns `409 SESSION_NOT_ACTIVE`. An unavailable Session Service or failed broker
+publication returns `503 UPSTREAM_UNAVAILABLE`; other Session Service gRPC failures return
+`502 UPSTREAM_ERROR`. The record is saved before publication, so publication failure does not
+roll back the record or automatically retry its event.
 
 
 
@@ -1635,7 +1658,7 @@ The session is not verified yet (`404 SESSION_NOT_FOUND` / `409 SESSION_NOT_ACTI
 { "error": { "code": "NOT_ASSIGNED_TO_SESSION", "message": "human text" } }
 
 // Response 404 — no record exists for this applicant
-{ "error": { "code": "VALIDATION_FAILED", "message": "applicant not found" } }
+{ "error": { "code": "APPLICANT_NOT_FOUND", "message": "applicant not found" } }
 ```
 The service looks up which scope(s) the calling player was assigned via `AssignScopes` and returns only that data. This is the enforcement point for the partitioning promised in Service Boundaries.
 
@@ -1648,7 +1671,8 @@ Both endpoints share a **5 second task timeout** and a **limit of 20 concurrent 
 // Response 504 — request exceeded the timeout
 { "error": { "code": "REQUEST_TIMEOUT", "message": "Request took too long to complete" } }
 ```
-These apply to REST only, not to the gRPC methods.
+gRPC uses a separate concurrent-call limit of 20 and a 5-second task timeout by default,
+returning `RESOURCE_EXHAUSTED` or `DEADLINE_EXCEEDED`. These limits also apply to event delivery.
 
 
 **Incoming gRPC**
@@ -1674,11 +1698,22 @@ Idempotent per `(session_id, player_id)` — a repeated call for the same pair r
 
 **Events (Message Broker)**
 
-The service publishes events with `POST /publish` on the Message Broker (`BROKER_URL`) and does not
-know who receives them. It registers the topics it wants in `SERVICE_TOPICS`; the broker delivers each
-one to a single instance with `POST /events/{topic}` and an `X-Message-Id` header. The service answers
-`2xx` only after the work is done and handles a repeated `X-Message-Id` safely. Topic names are the
-old routing keys and the payloads did not change.
+The service calls `broker.MessageBroker/Publish` at `BROKER_GRPC_TARGET` (default
+`message-broker:9090`) with `topic`, a generated UUID `message_id`, and `payload_json` containing
+the unchanged event object. Each call has a configurable 3000 ms deadline. A successful response
+means the broker accepted the event into its durable queue, not that subscribers finished processing.
+
+The existing gRPC server implements `broker.EventSubscriber/Deliver` alongside `AssignScopes`
+and `GetRecordSnapshot` on port 9090. Discovery advertises that port and the three subscribed
+topics. Both gRPC delivery and the retained `POST /events/{topic}` endpoint call the same handlers.
+Success, including an already initialized applicant, returns gRPC OK; malformed payloads return
+`INVALID_ARGUMENT`, unknown topics `NOT_FOUND`, and unexpected processing failures `INTERNAL`.
+The broker dead-letters permanent errors and retries transient failures. Idempotency uses the
+existing applicant ID/state behavior, rather than a separate message-ID database.
+
+For a new applicant, `applicant_initialized` accepts an integer `year` and a list of strings
+`courses`; omitted fields default to 1 and an empty list. Null or incorrectly typed fields are
+rejected with HTTP 422 through REST or `INVALID_ARGUMENT` through gRPC before saving.
 
 `record_initialized` - published when University Record Service is the first to be contacted for a new applicant.
 ```json
@@ -1708,7 +1743,8 @@ Consumed by Applicant Service and Credential Service.
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`
-   - `BROKER_URL` (default `http://message-broker:8000`)
+   - `BROKER_GRPC_TARGET` (default `message-broker:9090`)
+   - `BROKER_GRPC_DEADLINE_MS` (default `3000`)
    - `SERVICE_TOPICS` (default `applicant_initialized,credential_initialized,decision_made`)
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and the Message Broker.
 
@@ -1719,6 +1755,28 @@ requests go through the Gateway (`localhost:8090`).
 **DockerHub:** `anastasiatiganescu/university-record-service:v0.4.0` (public, `linux/amd64` + `linux/arm64`)
 
 **Source code / build details:** private repo `pad-team-17-university-record-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+
+Use images containing the broker gRPC implementation and University Record validation changes.
+Applicant and Credential must register `record_initialized` subscriptions; missing subscriptions
+still cause HTTP 503. Updating the CPR submodule pointers alone does not rebuild or update images.
+After publishing the intended service images, pull and recreate them:
+
+```bash
+docker compose pull university-record-service server-rules-service
+docker compose up -d university-record-service server-rules-service
+```
+
+**Postman:** [University Record collection](postman/pad-team-17-university-record.postman_collection.json).
+Run it top to bottom for the Player/Session setup and user-facing REST checks. Its HTTP event
+requests exercise REST compatibility, not gRPC Deliver. To verify gRPC delivery, import
+`services/university-record-service/src/main/proto/message_broker.proto` into a Postman gRPC
+request, connect to a temporarily reachable replica gRPC port, and call
+`broker.EventSubscriber/Deliver`. Check broker transport metrics and subscriber logs to distinguish
+gRPC delivery from REST fallback. Exact replica alternation requires equally loaded instances.
+
+The private service repository contains tests for publication, delivery, malformed event fields,
+duplicates, registration, headers and controller behavior. These tests do not replace full-stack
+checks of the deployed images, database, event delivery, replica failover and monitoring.
 
 To run multiple instances in the shared Compose deployment, scale by service
 name. Do not publish fixed host ports for these services; replicas communicate
