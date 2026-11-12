@@ -359,6 +359,7 @@ services:
 
     environment:
       PORT: 3000
+      LOG_DOWNLOAD_TOKEN: ${MODERATION_LOG_DOWNLOAD_TOKEN:?Set Moderation log download token}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
       GRPC_DISCOVERY_ENABLED: "true"
