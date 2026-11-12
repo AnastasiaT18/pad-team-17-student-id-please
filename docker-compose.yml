@@ -135,7 +135,6 @@ services:
       POSTGRES_DB: discord_dms
       POSTGRES_USER: ${DISCORD_DMS_DB_USER}
       POSTGRES_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
-      LOG_DOWNLOAD_TOKEN: ${DISCORD_DMS_LOG_DOWNLOAD_TOKEN:?Set Discord DMs log download token}
     volumes:
       - discord-dms-db-data:/var/lib/postgresql/data
     healthcheck:
@@ -400,6 +399,7 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET:?Set the shared JWT signing secret}
       PORT: 3000
+      LOG_DOWNLOAD_TOKEN: ${DISCORD_DMS_LOG_DOWNLOAD_TOKEN:?Set Discord DMs log download token}
       GRPC_URL: 0.0.0.0:9090
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
