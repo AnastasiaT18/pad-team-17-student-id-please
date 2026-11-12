@@ -51,8 +51,8 @@ replicas. The Gateway returns this public URL when a client negotiates `GET /ws/
 The Compose defaults for Pair 4 are:
 
 ```text
-MODERATION_VERSION=v0.4.0
-DISCORD_DMS_VERSION=v0.4.0
+MODERATION_VERSION=v0.5.0
+DISCORD_DMS_VERSION=v0.5.0
 DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.2.0
 ```
 
@@ -1818,7 +1818,7 @@ docker compose up -d moderation-service
 docker compose ps moderation-service
 ```
 
-- **Image:** `dannacojocari/moderation-service:v0.4.0` (also published as `latest`).
+- **Image:** `dannacojocari/moderation-service:v0.5.0` (also published as `latest`).
 - **Replicas:** 2, running on internal port `3000`.
 - **Access:** authenticated REST requests go through the Gateway at `http://localhost:8090`.
   The CPR Compose deployment does **not** publish Moderation directly on host port `8085`.
@@ -2137,7 +2137,7 @@ docker compose up -d redis discord-dms-service discord-proxy
 docker compose ps discord-dms-service redis discord-proxy
 ```
 
-- **Image:** `dannacojocari/discord-dms-service:v0.4.0` (also published as `latest`).
+- **Image:** `dannacojocari/discord-dms-service:v0.5.0` (also published as `latest`).
 - **Replicas:** 2, each listening on internal HTTP port `3000` and gRPC port `9090`.
 - **PostgreSQL:** both replicas share `discord-dms-db` and its persistent volume.
 - **Redis:** `REDIS_URL=redis://redis:6379`; both replicas connect to the adapter on startup.

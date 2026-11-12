@@ -369,7 +369,7 @@ services:
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.4.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.5.0}
 
     deploy:
       replicas: 2
@@ -406,7 +406,7 @@ services:
 
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.5.0}
 
     deploy:
       replicas: 2
