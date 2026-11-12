@@ -1560,7 +1560,7 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.0.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -1572,11 +1572,14 @@ Session replica does not cut the service off from the healthy one.
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
    - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
    - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
+   - `LOG_FILE` (default `logs/applicant-service.log`) — optional; the log file `GET /logs` downloads, rotated at 10 MB
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and the Message Broker.
 
 **Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8081`. The Compose file runs two replicas; the Message Broker finds them through Service Discovery and sends each request to the less busy one.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:4.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**Logs (Lab 4):** `GET /logs` downloads the responding replica's log file as an attachment (`?tail=N` returns its last N lines as text). The Gateway has no route to it; through the Message Broker: `curl -OJ localhost:8100/forward/applicant-service/logs`.
+
+**DockerHub:** `kutulin/pad-17-applicant-service:4.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -1868,7 +1871,7 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.0.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.1.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -1880,11 +1883,14 @@ Session replica does not cut the service off from the healthy one.
    - `GRPC_PORT` (default `9090`) — optional; the gRPC port
    - `SERVICE_DISCOVERY_URL` — Service Discovery's base URL (`http://discovery-service:8000` in the team's Compose file); without it the instance runs unregistered
    - `DISCOVERY_HEARTBEAT` (default `10s`) — optional; how often the instance renews, or withdraws, its registration
+   - `LOG_FILE` (default `logs/credential-service.log`) — optional; the log file `GET /logs` downloads, rotated at 10 MB
 3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL and the Message Broker.
 
 **Ports:** none on the host. REST is no longer exposed directly — reachable only through the Gateway (`localhost:8090`); inside the Compose network the service listens on `8082`. The Compose file runs two replicas; the Message Broker finds them through Service Discovery and sends each request to the less busy one.
 
-**DockerHub:** `kutulin/pad-17-credential-service:4.0.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**Logs (Lab 4):** `GET /logs` downloads the responding replica's log file as an attachment (`?tail=N` returns its last N lines as text). The Gateway has no route to it; through the Message Broker: `curl -OJ localhost:8100/forward/credential-service/logs`.
+
+**DockerHub:** `kutulin/pad-17-credential-service:4.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
