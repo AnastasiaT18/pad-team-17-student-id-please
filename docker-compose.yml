@@ -218,7 +218,7 @@ services:
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.3.0}
+    image: janetag/player-service:${PLAYER_VERSION:-0.4.0}
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -227,49 +227,49 @@ services:
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: 1h
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT: 3000
+      GRPC_PORT: 9090
+      SERVICE_NAME: player-service
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      LOG_DIR: /logs
+    volumes:
+      - player-logs:/logs
     deploy:
       replicas: 2
     depends_on:
       player-db:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       discovery-service:
         condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.3.1}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.4.0}
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
       DB_NAME: server_moderation_session
       DB_USER: ${SERVER_MODERATION_SESSION_DB_USER}
       DB_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       APPLICANT_GRPC_URL: applicant-service:9090
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
       DISCORD_DMS_GRPC_URL: discord-dms-service:9090
       PORT: 3001
+      GRPC_PORT: 9090
+      SERVICE_NAME: server-moderation-session-service
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      BROKER_GRPC_URL: message-broker:9090
+      BROKER_PUBLISH_TIMEOUT_MS: 1500
+      LOG_DIR: /logs
+    volumes:
+      - session-logs:/logs
     deploy:
       replicas: 2
     depends_on:
       server-moderation-session-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
-      discovery-service:
-        condition: service_healthy
-
+     
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
@@ -544,3 +544,5 @@ volumes:
   prometheus-data:
   grafana-data:
   loki-data:
+  player-logs:
+  session-logs:
