@@ -82,3 +82,11 @@ scrape_configs:
         type: A
         port: 3000
         refresh_interval: 10s
+
+  - job_name: discord-dms-service
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["discord-dms-service"]
+        type: A
+        port: 3000
+        refresh_interval: 10s
