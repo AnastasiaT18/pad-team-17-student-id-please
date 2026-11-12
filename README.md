@@ -112,11 +112,13 @@ Grade 10. `docker compose up -d` also starts the monitoring; nothing else is nee
 - **Prometheus** ([`monitoring/prometheus/prometheus.yml`](monitoring/prometheus/prometheus.yml))
   collects the metrics every 5 s: `GET /metrics` of the Message Broker and of Service Discovery,
   `GET /actuator/prometheus` of **every replica** of Applicant and Credential, and `GET /metrics` of
-  every replica of University Record and Server Rules. A replicated service is found through Docker's
+  every replica of University Record, Server Rules, Player (port `3000`), and Session (port `3001`).
+  A replicated service is found through Docker's
   DNS - its name resolves to all its replicas - so each replica is collected on its own and shows up as
   its own `instance`. The data is kept for 7 days in `prometheus-data`.
 - **Alerts** ([`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)) - a target down
-  for 30 s, a circuit breaker open, an instance above 80% load, a full queue, new dead letters. They are
+  for 30 s, a circuit breaker open, an instance above 80% load, a full queue, new dead letters, rejected
+  Session outbox events, and failed outbox metric collection. They are
   shown at `http://localhost:9091/alerts` and on the dashboard; Service Discovery's Telegram alerts
   stay the ones that notify the team.
 - **Logs** - Grafana Alloy ([`monitoring/alloy/config.alloy`](monitoring/alloy/config.alloy)) reads what
@@ -137,6 +139,11 @@ Grade 10. `docker compose up -d` also starts the monitoring; nothing else is nee
 | Message Broker - events | events published, delivered, retried and dead; publications without a subscriber; publish requests and delivery attempts over gRPC and over REST (Grade 8) |
 | Services | REST requests and busy request workers per replica, events received and published by topic and result, gRPC calls per replica |
 | Logs | the broker's decisions (least loaded instance, circuit breakers, reroutes, dead letters), errors and warnings per service per minute, and those lines themselves |
+
+Player and Session expose `pad_events_received_total` for incoming gRPC events. The **Events the
+services received** panel groups it by application, topic, transport, and result. Session's publish
+attempts appear in **Events the services published**, and **Session outbox backlog** shows pending,
+retrying, and rejected events.
 
 A service whose owner adds metrics needs one job in `prometheus.yml` - its Compose service name, the
 port it listens on inside the network, and the path of its metrics:
@@ -160,18 +167,25 @@ line with its `container`.
 ## Service Boundaries
 
 ### Player Service
-Owns the identity of the players themselves — accounts, authentication, profiles, friends, XP/levels, and their progression history as moderators, including shifts completed and 
-disciplinary actions taken. 
 
-It does not contain any data about the people attempting to join the university server — that responsibility belongs entirely to the applicant-side services 
-below. At the end of a shift, it receives the results from the Server Moderation Session Service to update a player's XP and level.
+Owns the identity of the players themselves - accounts, authentication, profiles, friends,
+XP/levels, and their progression history as moderators, including shifts completed and
+disciplinary actions taken.
+
+It does not contain any data about the people attempting to join the university server - that
+responsibility belongs entirely to the applicant-side services. At the end of a shift, it
+receives the results from the Server Moderation Session Service to update a player's XP and level.
 
 ### Server Moderation Session Service
-Owns the state of an active moderation shift: which players are in it, their assigned roles (Moderator vs Junior Moderators), the applicant currently being reviewed, how many applications
-have been processed, and the running session score and penalties. 
 
-It does not own applicant, credential, or record data, nor the decision logic itself — it only orchestrates the shift. 
-It calls the Applicant Service to advance to the next applicant, provisions channels through the Discord DMs Service, and publishes the shift's final results to the Player Service once it ends.
+Owns the state of an active moderation shift: which players are in it, their assigned roles
+(Moderator vs Junior Moderators), the applicant currently being reviewed, how many applications
+have been processed, and the running session score and penalties.
+
+It does not own applicant, credential, or record data, nor the decision logic itself - it only
+orchestrates the shift. It calls the Applicant Service to advance to the next applicant,
+provisions channels through the Discord DMs Service, and publishes the shift's final results to
+the Player Service once it ends.
 
 ### Applicant Service
 Owns an applicant's basic identity — name, student ID, major, year, university status, courses, and role — including cases where an applicant intentionally provides false information. 
@@ -327,6 +341,11 @@ Data lives in one database per service. Services never touch each other's tables
 
 ### Player Service
 
+#### Communication contract
+
+Data lives in its own database. No other service reads this service's tables - only its API
+or its events.
+
 **Authentication**
 
 Player Service does not verify tokens on incoming requests. The Gateway validates the Bearer
@@ -335,7 +354,7 @@ token and passes the caller's id in the `X-Player-Id` header, which this service
 Every endpoint except `POST /players` and `POST /players/login` requires a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or invalid token returns `401 UNAUTHORIZED`.
 
 `POST /players/login` still signs the token, so `JWT_SECRET` must be the same value the Gateway uses to verify it.
- 
+
 **Client-facing REST (via API Gateway)**
 
 **Health check**
@@ -362,32 +381,31 @@ It is meant for Service Discovery, not for clients.
 
 **Service Discovery**
 
-On startup the service registers itself with Service Discovery (`POST /register`) with its
-service name (`player-service`), instance id (`HOSTNAME`), host and port. The service registers again every `SERVICE_HEARTBEAT_MS` (default 20000), so an instance that was removed from Discovery, or a Discovery that restarted, gets it back.
- 
+On startup the service registers itself with Service Discovery (`POST /register`) with its service name (`player-service`), instance id (`HOSTNAME`), host, HTTP port, `grpc_port` and the event topics it receives (`topics: ["shift_ended"]`). The service registers again every `SERVICE_HEARTBEAT_MS` (default 20000), so an instance that was removed from Discovery, or a Discovery that restarted, gets it back.
+
 `POST /players` - register a new player account
 ```json
 // Request
 { "username": "string", "email": "string", "password": "string" }
- 
+
 // Response 201
 { "player_id": "uuid", "username": "string", "email": "string", "xp": 0, "level": 1, "created_at": "RFC3339" }
 ```
- 
+
 **Errors:** `422 VALIDATION_FAILED` if username, email, or password is missing or malformed, `409 EMAIL_ALREADY_REGISTERED` if the email is already in use.
- 
+
 `POST /players/login` - authenticate
 ```json
 // Request
 { "email": "string", "password": "string" }
- 
+
 // Response 200
 { "player_id": "uuid", "token": "jwt string" }
 ```
- 
+
 **Errors:** `401 INVALID_CREDENTIALS` if the email/password combination is wrong.
- 
- 
+
+
 `GET /players/{player_id}` - fetch profile (requires auth)
 ```json
 // Response 200
@@ -401,15 +419,15 @@ service name (`player-service`), instance id (`HOSTNAME`), host and port. The se
   "disciplinary_actions": 0
 }
 ```
- 
+
 **Errors:** `404 PLAYER_NOT_FOUND`.
- 
- 
+
+
 `PATCH /players/{player_id}` - update profile fields (requires auth; caller must be this player)
 ```json
 // Request (any subset)
 { "username": "string", "email": "string" }
- 
+
 // Response 200
 {
   "player_id": "uuid",
@@ -421,62 +439,62 @@ service name (`player-service`), instance id (`HOSTNAME`), host and port. The se
   "disciplinary_actions": 0
 }
 ```
- 
+
 **Errors:** `422 VALIDATION_FAILED` if a field is malformed, `403 FORBIDDEN` if the caller isn't this player, `404 PLAYER_NOT_FOUND`.
- 
- 
+
+
 `GET /players/{player_id}/friends` - list a player's friends (requires auth)
 ```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
 ```
- 
+
 **Errors:** `404 PLAYER_NOT_FOUND`.
- 
- 
+
+
 `POST /players/{player_id}/friends` - send a friend request (requires auth; caller must be this player)
 ```json
 // Request
 { "friend_id": "uuid" }
- 
+
 // Response 200
 { "request_id": "uuid", "friend_id": "uuid", "status": "pending" }
 ```
- 
+
 If `friend_id` had already sent a pending request to the caller, that request is accepted
 immediately instead, and the response comes back with `"status": "accepted"`.
- 
+
 **Errors:** `403 FORBIDDEN` if the caller isn't `player_id`, `422 VALIDATION_FAILED` if `friend_id` equals the caller's own id, `404 PLAYER_NOT_FOUND` if `friend_id` doesn't exist, `409 ALREADY_FRIENDS` if the friendship already exists, `409 FRIEND_REQUEST_ALREADY_SENT` if the caller already has a pending request to this player.
- 
- 
+
+
 `GET /players/{player_id}/friend-requests` - list a player's incoming friend requests (requires auth; caller must be this player)
 ```json
 // Response 200
 { "requests": [ { "request_id": "uuid", "player_id": "uuid", "username": "string" } ] }
 ```
- 
+
 **Errors:** `403 FORBIDDEN` if the caller isn't `player_id`.
- 
- 
+
+
 `POST /friend-requests/{request_id}/accept` - accept an incoming friend request (requires auth; caller must be the request's addressee)
 ```json
 // Response 200
 { "friends": [ { "player_id": "uuid", "username": "string" } ] }
 ```
- 
+
 **Errors:** `404 FRIEND_REQUEST_NOT_FOUND` if the request doesn't exist, isn't pending, or doesn't belong to the caller.
- 
- 
+
+
 `DELETE /friend-requests/{request_id}` - decline a friend request, or cancel one you sent (requires auth; caller must be the requester or addressee)
 ```
 // Response 204, no body
 ```
- 
+
 **Errors:** `404 FRIEND_REQUEST_NOT_FOUND` if the request doesn't exist or the caller isn't involved in it.
- 
- 
-**Events consumed (RabbitMQ)**
- 
+
+
+**Events consumed through the message broker**
+
 `shift_ended` - published by Session Service when a shift ends.
 ```json
 {
@@ -488,55 +506,230 @@ immediately instead, and the response comes back with `"status": "accepted"`.
 ```
 Applied per `player_id` to update `xp`, `level`, `shifts_completed`, `disciplinary_actions`.
 Idempotent on `(session_id, player_id)`.
- 
- 
-The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange
-`pad17.events` (override with `RABBITMQ_EXCHANGE`) with routing key `shift_ended`. A message that
-fails validation or processing is rejected without requeue. The handling logic
-(`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
 
-## Persistence
- 
+
+The broker calls `broker.EventSubscriber.Deliver` on the registered `grpc_port` (default 9090).
+The shared contract is `src/proto/message_broker.proto`. The envelope contains `topic`,
+`message_id` (UUID) and `payload_json` (the JSON object above encoded as a string).
+
+- `OK`: results applied, or already applied.
+- `INVALID_ARGUMENT`: malformed message or payload; the broker dead-letters it.
+- `NOT_FOUND`: unsupported topic; the broker dead-letters it.
+- `INTERNAL`, `RESOURCE_EXHAUSTED`, `DEADLINE_EXCEEDED`: retryable processing failure,
+  concurrency limit or timeout.
+
+The gRPC concurrency limit and timeout use `MAX_CONCURRENT_REQUESTS` and `REQUEST_TIMEOUT_MS`.
+The health endpoint includes gRPC utilization. RabbitMQ consumption is disabled; Session must
+publish through the custom broker for new shifts to reach this version of Player.
+
+**Events delivered by the message broker**
+
+`POST /events/shift_ended` - the same `shift_ended` event, delivered over HTTP by the message broker
+to the instances that registered the `shift_ended` topic with Service Discovery. The body is the
+event shown above (the payload only), and the broker's message id arrives in the `X-Message-Id`
+header. The route is internal: it needs no user token, and the Gateway has no route to `/events`.
+
+| Response | Meaning | What the broker does (per the event contract) |
+|---|---|---|
+| `200` | Event applied, or already applied | done |
+| `422 VALIDATION_FAILED` | The body does not match the event above, or an id is not a UUID | dead letter channel, no retry |
+| `429` | The instance is at its concurrent request limit | retries |
+| `5xx` | Processing failed | retries |
+
+Delivery is at least once, so the same event can arrive more than once; applying it again is a
+no-op (see above). The HTTP endpoint remains available for compatibility; the broker prefers
+gRPC for this instance.
+
+#### Persistence
+
 The Player Service owns its PostgreSQL database.
- 
+
 The main entities are:
- 
+
 - `players` - player accounts and profile data
 - `friendships` - friend requests and accepted friendships between players
 - `processed_shifts` - tracks which `(session_id, player_id)` shift results have already been
   applied, so re-delivery of a `shift_ended` event is a no-op
 No other microservice directly accesses the Player Service database.
 
-### Running this service
+#### Running this service
 
-**To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/player-service:0.3.0`
-   (or let the team's Docker Compose file, in this CPR, pull it for you)
-2. Provide the required environment variables (values shared directly within the team, never committed):
-   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-   - `JWT_SECRET`, `JWT_EXPIRES_IN` — used only to sign tokens at login; the Gateway verifies them with the same `JWT_SECRET`
-   - `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` — `RABBITMQ_EXCHANGE` is optional (default `pad17.events`)
-   - `PORT` — `3000` inside the container
-3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
+The shared CPR Compose stack runs the published `0.4.1` image. From the CPR root, run `docker compose up -d player-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
 
-**Ports:** not published on the host; reachable only through the Gateway (`localhost:8090`)
+**Standalone setup**
 
-**Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so an instance removed by a caller's circuit breaker comes back by itself.
+Run the following standalone commands from the [service checkout](services/player-service). Its local Compose ports and volumes are specific to that checkout.
 
-**DockerHub:** `janetag/player-service:0.3.0` (public, `linux/amd64` + `linux/arm64`)
+To run the service locally, the following software is required:
 
-**Schema:** created by the service itself at startup, so the database container comes up empty.
+- Node.js 24+
+- npm
+- PostgreSQL 17+
+Alternatively, Docker can be used to run both the service and its PostgreSQL database:
 
-**Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
+- Docker
+- Docker Compose
+Create a `.env` file based on `.env.example`:
 
-**Source code / build details:** private repo `pad-team-17-player-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+```
+DB_HOST=postgres
+DB_PORT=5432
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=your_db_name
+
+JWT_SECRET=your_jwt_secret
+JWT_EXPIRES_IN=1h
+PORT=3000
+MAX_CONCURRENT_REQUESTS=50   # optional, default 50
+REQUEST_TIMEOUT_MS=5000      # optional, default 5000
+
+LOG_DIR=logs
+LOG_MAX_BYTES=10485760
+LOG_BACKUPS=3
+
+GRPC_PORT=9090
+
+SERVICE_DISCOVERY_URL=http://discovery-service:8000   # optional, registration is skipped when empty
+SERVICE_NAME=player-service                            # optional, default player-service
+
+SERVICE_HEARTBEAT_MS=20000   # optional
+```
+
+For local (non-Docker) development, `DB_HOST` should point at your local PostgreSQL instance
+instead of `postgres`.
+
+For local development, install the dependencies and start the service:
+
+```bash
+npm install
+npm run start:dev
+```
+
+When running locally, the Player Service is available at `http://localhost:3000`.
+
+Guarded endpoints read the caller from the `X-Player-Id` header, which the Gateway sets. When calling the service directly, send that header yourself; otherwise go through the Gateway.
+
+**Running with Docker**
+
+The service and its PostgreSQL database can be started using Docker Compose:
+
+```bash
+docker compose up --build -d
+```
+
+The Player Service is available on the host at `http://localhost:3000`. PostgreSQL is exposed
+on the host at `5432`, with its data stored in the `player_pg_data` named volume so it survives
+container restarts.
+
+The published Docker image is:
+
+```
+janetag/player-service:0.4.1
+```
+
+To check the containers:
+
+```bash
+docker compose ps
+```
+
+To stop the service:
+
+```bash
+docker compose down
+```
+
+The service starts without RabbitMQ. Event delivery requires the custom Message Broker and
+Service Discovery from the CPR stack. The local Compose file exposes gRPC on `localhost:9090`
+for testing; the team deployment should keep that port inside its Docker network.
+`JWT_SECRET` signs login tokens and must match the Gateway configuration.
+
+#### Application logs
+
+Nest application logs are written both to the console and to
+`LOG_DIR/<hostname>/player.log` as newline-delimited JSON. Entries include timestamp,
+level, service, instance, context, message and error stack details when available.
+Existing HTTP, Discovery and gRPC event-handler logs use this logger.
+
+Files rotate before exceeding `LOG_MAX_BYTES` (default 10 MiB), keeping `LOG_BACKUPS`
+numbered backups (default 3; allowed range 0-10). Each replica uses its hostname directory.
+For multiple local instances sharing a hostname, configure a separate `LOG_DIR` for each.
+Generated logs are excluded from Git and the Docker build context.
+
+Writes run asynchronously with a buffer capped at 1,000 entries. Disk failures, oversized
+entries or a full buffer can lose file entries; a warning is written to stderr and console
+logging continues. Pending writes are flushed on graceful shutdown; abrupt termination can
+lose buffered entries. Container logs need a volume mount if they must survive replacement.
+
+`GET /logs` downloads the responding replica's active `player.log` as a text attachment.
+Pending writes are flushed first. The response streams the opened file at its current size;
+later writes and rotation do not extend the download. Backups and other replicas are not
+included. Responses use `Cache-Control: no-store` and accept no caller-supplied file path.
+
+| Response | Meaning |
+|---|---|
+| `200` | Active log downloaded, including an empty file |
+| `404 LOG_NOT_FOUND` | No active log file exists |
+| `503 LOG_UNAVAILABLE` | The configured file could not be opened or inspected |
+
+This is an internal operational endpoint without a player-token requirement. The Gateway's
+public route allowlist does not expose `/logs`. Use `http://localhost:3000/logs` for a local
+instance, or `/forward/player-service/logs` on the internal broker's HTTP API in the team
+deployment. The broker selects one healthy replica. Network access to operational endpoints
+must remain restricted to trusted operators.
+
+#### Metrics
+
+`GET /metrics` exposes Prometheus text format on the Player HTTP port. It is an internal
+operational endpoint, absent from the Gateway's public route allowlist, and uses
+`Cache-Control: no-store`. Metrics scrapes remain available at the HTTP concurrency limit.
+Health checks and metrics scrapes are excluded from request statistics and routine logs.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `http_requests_total` | Counter | Completed HTTP requests by method, route template and status |
+| `http_request_duration_seconds` | Histogram | Response duration with cumulative buckets, sum and count |
+| `http_requests_in_flight` | Gauge | Requests with an open response |
+| `http_concurrency_limit` | Gauge | Configured HTTP concurrency limit |
+| `grpc_server_requests_total` | Counter | Incoming event RPCs by gRPC service, method and numeric status code |
+| `grpc_server_duration_seconds` | Histogram | Incoming event handler duration |
+| `grpc_server_in_flight` | Gauge | Event RPCs being observed by the interceptor |
+| `grpc_concurrency_limit` | Gauge | Configured incoming gRPC concurrency limit |
+
+All samples have `service="player-service"`. Prometheus identifies each replica through its
+scrape target's `instance` label. Routes use templates such as `/players/:playerId`, never
+actual player IDs, emails, tokens or query strings. Requests rejected before route matching
+use `unmatched`; disconnected responses are recorded once with status `499` (not a status
+sent to the client). Metrics reset when the process restarts. Durations measure the response
+lifecycle, not database work that may continue after a timeout or disconnection.
+
+Incoming gRPC samples use `grpc_service="broker.EventSubscriber"` and `method="Deliver"`.
+Codes include `0` (OK), `3` (INVALID_ARGUMENT), `4` (DEADLINE_EXCEEDED), `5` (NOT_FOUND),
+`8` (RESOURCE_EXHAUSTED) and `13` (INTERNAL). The existing server timeout and concurrency
+limit still apply. Subscription cancellation before completion/error is recorded as `1`
+(CANCELLED). These samples describe the server-observed lifecycle; timing out does not
+automatically cancel database work already running. Event payloads, player IDs and session
+IDs are never labels. Shared Prometheus scraping is configured separately in CPR.
+
+#### Postman collection
+
+The REST API can be tested using the [Player Postman collection](postman/pad-team-17-player.postman_collection.json). Requests go through the Gateway, so log in first and use the returned token as a Bearer token.
+
+---
 
 ### Server Moderation Session Service
 
+#### Communication contract
+
+Data lives in its own database. No other service reads this service's tables - only its API
+or its events.
+
 **Client-facing REST (via API Gateway)**
 
-The Gateway validates the Bearer token and passes the caller's id in the `X-Player-Id` header, which this service trusts. It must only be reachable through the Gateway.
- 
+All endpoints require a valid Bearer token (`Authorization: Bearer <jwt>`). A missing or
+invalid token returns `401 UNAUTHORIZED`.
+
 `POST /sessions` - create a session
 ```json
 // Response 201
@@ -666,12 +859,16 @@ and `DISCORD_DMS_GRPC_URL` are all set and use real gRPC.
 
 **Incoming gRPC calls**
 
-The service also runs a gRPC server on `GRPC_PORT` (default `9090`), so other services can check a session's status. It is not exposed through the Gateway.
+The service also runs a gRPC server on `GRPC_PORT` (default `9090`), so other services can check a session's status and who may submit decisions. It is not exposed through the Gateway.
 
-`SessionService.GetSessionStatus` (called by University Record Service before creating a record; Applicant and Credential can reuse it)
+`SessionService` has two RPCs:
+- `GetSessionStatus` (called by University Record Service before creating a record; Applicant and Credential can reuse it)
+- `ValidateDecisionSubmission` (called by Moderation Service before it evaluates a verdict)
+
 ```proto
 service SessionService {
   rpc GetSessionStatus (GetSessionStatusRequest) returns (GetSessionStatusResponse);
+  rpc ValidateDecisionSubmission (ValidateDecisionSubmissionRequest) returns (ValidateDecisionSubmissionResponse);
 }
 
 message GetSessionStatusRequest {
@@ -681,27 +878,87 @@ message GetSessionStatusRequest {
 message GetSessionStatusResponse {
   string status = 1;   // "created" | "active" | "ended"
 }
+
+message ValidateDecisionSubmissionRequest {
+  string session_id = 1;
+  string applicant_id = 2;
+  string player_id = 3;   // the Gateway-authenticated caller, never taken from the public request body
+}
+
+message ValidateDecisionSubmissionResponse {
+  bool allowed = 1;       // true only when every check succeeds
+}
 ```
 
-An unknown session (or an id that is not a valid UUID) is answered with gRPC status `NOT_FOUND`. The proto file is `src/proto/session.proto`; callers use the same file.
+The proto file is `src/proto/server-moderation-session.proto`; callers use the same file.
+
+`GetSessionStatus`: an unknown session (or an id that is not a valid UUID) is answered with gRPC status `NOT_FOUND`.
+
+`ValidateDecisionSubmission` is read-only: it creates no applicant, changes no score and publishes no event. The checks run in this order, and the first failure decides the gRPC status:
+
+| Check | gRPC status |
+|---|---|
+| `session_id`, `applicant_id` or `player_id` is not a UUID | `INVALID_ARGUMENT` |
+| the session does not exist | `NOT_FOUND` |
+| `player_id` is not the session's moderator (a Junior Moderator or an unrelated player) | `PERMISSION_DENIED` |
+| the session is `created` or `ended` | `FAILED_PRECONDITION` |
+| `applicant_id` is not the applicant currently under review (none, already processed or unrelated) | `FAILED_PRECONDITION` |
+| the session cannot be read | `INTERNAL` |
+
+Callers must treat anything other than an explicit `allowed: true` as a denial. The answer is a snapshot: the session can still end or move on before the decision event arrives, and `decision_made` handling keeps its own stale-event checks.
 
 When more than `MAX_CONCURRENT_REQUESTS` gRPC calls are in flight, new calls are answered with gRPC status `RESOURCE_EXHAUSTED`.
 
-**Events published (RabbitMQ)**
+Incoming gRPC handlers also use `REQUEST_TIMEOUT_MS` (default 5000 ms) as a server-side
+response timeout. A handler that does not answer within that time returns `DEADLINE_EXCEEDED`
+(code `4`), records the timeout in gRPC metrics, and releases its concurrency slot. Existing
+RPC errors keep their original status. This applies to both `SessionService` RPCs and
+`broker.EventSubscriber.Deliver`; a caller may impose a shorter deadline of its own.
+Timing out unsubscribes from the handler response, but does not automatically cancel an
+already running database operation or roll back its effects. Event retries still rely on
+the existing stale/duplicate-decision checks.
 
-`shift_ended` - published when a shift ends.
+**Events published (custom Message Broker over gRPC)**
+
+`shift_ended` — published when a moderation shift finishes.
+
+The event is persisted in the `shift_ended_outbox` PostgreSQL table in the same transaction that marks the session as ended.
+
+A background dispatcher publishes the event using `MessageBroker.Publish` over gRPC.
+
+- Topic: `shift_ended`
+- Message ID: Session UUID
+- Transport: gRPC
+- Broker address: `BROKER_GRPC_URL`
+
+The same message ID is reused on retries to support deduplication.
+
+Payload:
+
 ```json
 {
   "session_id": "uuid",
   "results": [
-    { "player_id": "uuid", "xp_gained": 0, "shift_completed": true, "disciplinary_action": false }
+    {
+      "player_id": "uuid",
+      "xp_gained": 0,
+      "shift_completed": true,
+      "disciplinary_action": false
+    }
   ]
 }
 ```
 
-**Events consumed (RabbitMQ)**
+**Events consumed (custom Message Broker over gRPC)**
 
-`decision_made` - published by Moderation Service after each verdict.
+`decision_made` — published by the Moderation Service after an applicant decision.
+
+During startup, the Session Service registers its interest in the `decision_made` topic with Service Discovery, together with its gRPC port.
+
+The Message Broker delivers events using `EventSubscriber.Deliver` over gRPC.
+
+Payload:
+
 ```json
 {
   "session_id": "uuid",
@@ -711,8 +968,16 @@ When more than `MAX_CONCURRENT_REQUESTS` gRPC calls are in flight, new calls are
   "penalty": 0
 }
 ```
-Applied to update `score`, `processed_count`, clear `current_applicant_id`, and trigger the next
-`GetNextApplicant` call.
+
+**Processing behavior:**
+
+1. The service validates the incoming event.
+2. The next applicant is retrieved through `ApplicantService.GetNextApplicant`.
+3. Session state is updated using a conditional database operation.
+4. Duplicate or stale events are acknowledged without applying the decision twice.
+5. If retrieving the next applicant fails, the handler returns a gRPC error so the broker can retry delivery.
+
+Malformed events return `INVALID_ARGUMENT`, while unsupported topics return `NOT_FOUND`.
 
 **Health check**
 
@@ -764,7 +1029,7 @@ If Discovery has no instance of the service, the fixed address (`APPLICANT_GRPC_
 `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`) is used. That address has no breaker, and
 nothing is removed. Without `SERVICE_DISCOVERY_URL`, only the fixed address is used.
 
-## Persistence
+#### Persistence
 
 The Session Service owns its PostgreSQL database.
 
@@ -772,30 +1037,215 @@ The main entities are:
 
 - `sessions` - session state: status, moderator, current applicant, processed count, score, timestamps
 - `session_junior_moderators` - which players have joined a session as Junior Moderator, and when
+- `shift_ended_outbox` - stores shift-ended events, publication attempts, retry times, and rejection details until the broker accepts them; published records are retained.
 
 No other microservice directly accesses the Session Service database.
 
-### Running this service
+#### Running this service
 
-**To run it (no private repo access needed):**
-1. Pull the public image — `docker pull janetag/server-moderation-session-service:0.3.1`
-   (or let the team's Docker Compose file, in this CPR, pull it for you)
-2. Provide the required environment variables (values shared directly within the team, never committed):
-   - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD`, `APPLICANT_GRPC_URL`, `UNIVERSITY_RECORD_GRPC_URL`, `DISCORD_DMS_GRPC_URL`, and an optional `GRPC_DEADLINE_MS`
-   - `PORT` — `3001` inside the container
-3. Run via the team's `docker-compose.yml` — it references this image by tag, along with PostgreSQL.
+The shared CPR Compose stack runs the published `0.4.1` image. From the CPR root, run `docker compose up -d server-moderation-session-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
 
-**Ports:** not published on the host; reachable only through the Gateway (localhost:8090)
+**Standalone setup**
 
-**Replicas and Discovery:** the compose file runs two replicas. Each one registers with Service Discovery at startup and again every 20 s, so a removed instance comes back by itself. The Applicant, University Record and Discord DMs clients look their instances up in Discovery (`applicant-service`, `university-record-service`, `discord-dms-service`), call them in turn, and remove an instance from Discovery after 3 failed calls in 17.5 s. The fixed `*_GRPC_URL` addresses are used when Discovery has no instance of a service.
+Run the following standalone commands from the [service checkout](services/server-moderation-session-service). Its local Compose ports and volumes are specific to that checkout.
 
-**DockerHub:** `janetag/server-moderation-session-service:0.3.1` (public, `linux/amd64` + `linux/arm64`)
+To run the service locally, the following software is required:
 
-**Schema:** created by the service itself at startup, so the database container comes up empty.
+- Node.js 24+
+- npm
+- PostgreSQL 17+
+Alternatively, Docker can be used to run both the service and its PostgreSQL database:
 
-**Postman:** the REST API can be tested with the collection in the `postman/` folder of this CPR.
+- Docker
+- Docker Compose
+Create a `.env` file based on `.env.example`:
 
-**Source code / build details:** private repo `pad-team-17-server-moderation-session-service` (professor has collaborator access) — only needed if inspecting the implementation itself, not for running the service.
+```
+DB_HOST=postgres
+DB_PORT=5432
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=your_db_name
+
+PORT=3001
+MAX_CONCURRENT_REQUESTS=20   # optional, default 20
+REQUEST_TIMEOUT_MS=5000      # optional, default 5000
+
+LOG_DIR=logs
+LOG_MAX_BYTES=10485760
+LOG_BACKUPS=3
+
+BROKER_GRPC_URL=message-broker:9090  # host:port reachable from Session; do not leave empty
+BROKER_PUBLISH_TIMEOUT_MS=1500
+
+APPLICANT_GRPC_URL=          # e.g. applicant-service:9090, empty = use the mock
+GRPC_DEADLINE_MS=1500        # optional, default 1500
+UNIVERSITY_RECORD_GRPC_URL=
+DISCORD_DMS_GRPC_URL=
+GRPC_PORT=9090  # gRPC server for SessionService and EventSubscriber
+
+SERVICE_DISCOVERY_URL=http://discovery-service:8000   # optional, registration is skipped when empty
+SERVICE_NAME=server-moderation-session-service       # must match the Discovery service name
+SERVICE_HEARTBEAT_MS=20000                            # optional, how often the instance registers again
+```
+
+For local (non-Docker) development, `DB_HOST` should point at your local PostgreSQL instance
+instead of `postgres`. `BROKER_GRPC_URL` must be a non-empty gRPC address in `host:port`
+format, without `http://` or `https://`. The example `message-broker:9090` requires Session
+and the broker to share a Docker network where `message-broker` resolves to the broker.
+When running Session directly on the host, use `localhost:<published-broker-grpc-port>`
+and a host-accessible `SERVICE_DISCOVERY_URL` (or leave Discovery unset to skip registration).
+The broker's REST port, such as `8100`, is separate from its gRPC port.
+
+Keep `SERVICE_NAME=server-moderation-session-service` so registration matches the name used
+by the Gateway, broker and other services. If you already have a `.env`, update these values
+there manually; editing `.env.example` does not update an existing `.env`.
+
+Session Service does not verify tokens. The Gateway validates the Bearer token and passes the caller's id in the `X-Player-Id` header, which is what this service trusts. Client traffic must go through the Gateway.
+
+For local development, install the dependencies and start the service:
+
+```bash
+npm install
+npm run start:dev
+```
+
+When running locally, the Session Service is available at `http://localhost:3001`.
+
+**Running with Docker**
+
+The service and its PostgreSQL database can be started using Docker Compose:
+
+```bash
+docker compose up --build -d
+```
+
+The Session Service uses the team's custom Message Broker instead of RabbitMQ for asynchronous event communication.
+
+When a moderation shift ends, the `shift_ended` event is saved in the PostgreSQL outbox within the same transaction as the session update. A background dispatcher publishes the event to the Message Broker using gRPC.
+
+If the broker is unavailable, the event remains in the outbox and publication is retried.
+
+For end-to-end communication, the Session Service must run alongside the Message Broker and Service Discovery in the team's shared CPR Docker Compose stack.
+
+The Session Service is available on the host at `http://localhost:3001`. PostgreSQL is exposed
+on the host at `5433`, with its data stored in the `session_pg_data` named volume so it survives
+container restarts.
+
+The published Docker image is:
+
+```
+janetag/server-moderation-session-service:0.4.1
+```
+
+To check the containers:
+
+```bash
+docker compose ps
+```
+
+To stop the service:
+
+```bash
+docker compose down
+```
+
+#### Application logs
+
+Nest application logs are written both to the console and to
+`LOG_DIR/<hostname>/session.log` as newline-delimited JSON. Entries include the timestamp,
+level, service, instance, context and message, with stack details for errors. This includes
+the existing HTTP, gRPC, Discovery and outbox logs emitted through Nest's logger.
+
+Files rotate before exceeding `LOG_MAX_BYTES` (default 10 MiB). `LOG_BACKUPS` numbered
+backups are retained (default 3; allowed range 0-10). Each replica uses its own hostname
+directory. When running multiple instances on the same host, give each a distinct `LOG_DIR`.
+Generated logs are excluded from Git and the Docker build context.
+
+File writes run asynchronously with a bounded buffer of 1,000 entries. If the buffer is full,
+an entry exceeds the file limit or a disk write fails, that file entry may be lost and a warning
+is written to stderr. Console output continues. Pending writes are flushed on graceful shutdown;
+an abrupt process/container kill can lose buffered entries. Files inside a container disappear
+on removal unless `LOG_DIR` is mounted to persistent storage.
+
+`GET /logs` downloads the responding replica's active `session.log` as a text attachment.
+Queued file writes are flushed first, then the response streams a snapshot of the opened
+file's current size. Rotation and later entries do not extend that snapshot. Numbered backups
+and logs from other replicas are not included. Responses use `Cache-Control: no-store`.
+
+| Response | Meaning |
+|---|---|
+| `200` | Active log downloaded, including an empty file |
+| `404 LOG_NOT_FOUND` | No active log file exists |
+| `503 LOG_UNAVAILABLE` | The configured file could not be opened or inspected |
+
+The endpoint accepts no file path. It is an internal operational endpoint without a user-token
+requirement and is absent from the Gateway's public route allowlist. For a local instance,
+download from `http://localhost:3001/logs`. In the team network, an operator can use
+`GET /forward/server-moderation-session-service/logs` on the internal message broker;
+the broker selects one healthy replica. Requests through the public Gateway must remain blocked.
+
+#### Metrics
+
+`GET /metrics` exposes Prometheus text format on the Session HTTP port. It is an internal
+operational endpoint, absent from the Gateway's public allowlist, and uses `Cache-Control: no-store`.
+It remains available when the HTTP concurrency limit has been reached. Health and metrics
+polling are excluded from HTTP request statistics and routine request logs.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `http_requests_total` | Counter | Completed requests by method, route template and status |
+| `http_request_duration_seconds` | Histogram | Response duration with cumulative buckets, sum and count |
+| `http_requests_in_flight` | Gauge | Requests with an open response |
+| `http_concurrency_limit` | Gauge | Configured HTTP concurrency limit |
+| `grpc_server_requests_total` | Counter | Incoming RPCs by gRPC service, method and numeric status code |
+| `grpc_server_duration_seconds` | Histogram | Incoming RPC handler duration |
+| `grpc_server_in_flight` | Gauge | Incoming RPCs being observed by the interceptor |
+| `grpc_concurrency_limit` | Gauge | Configured incoming RPC concurrency limit |
+| `session_outbox_pending` | Gauge | Unpublished events not permanently rejected, including retries |
+| `session_outbox_retrying` | Gauge | Pending events with at least one persisted attempt |
+| `session_outbox_rejected` | Gauge | Permanently rejected publications retained in PostgreSQL |
+| `session_outbox_oldest_pending_age_seconds` | Gauge | Oldest pending event age at collection; zero when empty |
+| `session_outbox_publications_total` | Counter | This replica's publish outcomes: `accepted`, `retry`, `rejected` |
+| `session_outbox_collection_success` | Gauge | Whether the latest backlog query succeeded |
+| `session_outbox_snapshot_timestamp_seconds` | Gauge | Last successful backlog query time; zero before collection |
+
+Every sample has `service="server-moderation-session-service"`. Prometheus identifies each
+replica through the scrape target's `instance` label. Route labels use templates such as
+`/sessions/:sessionId`, never actual session/player IDs or query strings. Requests rejected
+before a route is matched use `unmatched`. A disconnected response is counted once with
+status `499`; that value is an observation, not a response sent to the client.
+
+Metrics are held in memory and reset when the process restarts. Durations measure the HTTP
+response lifecycle, not database work that may continue after a timeout/disconnection.
+Incoming gRPC metrics cover `SessionService.GetSessionStatus`,
+`SessionService.ValidateDecisionSubmission` and `broker.EventSubscriber.Deliver`.
+Status codes include `0` (OK), `3` (INVALID_ARGUMENT), `5` (NOT_FOUND), `8`
+(RESOURCE_EXHAUSTED) and `13` (INTERNAL). Calls rejected by the concurrency limit
+are counted. An interceptor subscription cancelled before completion/error is recorded as
+`1` (CANCELLED); these metrics describe the server-observed lifecycle, not proof that all
+underlying database work has stopped. Request payloads and IDs are never metric labels.
+
+The outbox worker refreshes the database backlog snapshot after each batch, normally about
+once per second when idle. Under load, refresh follows the batch (up to 20 bounded publish
+attempts). `/metrics` serves the cached snapshot without issuing database queries.
+If collection fails, the previous snapshot remains visible with `collection_success=0` and
+an unchanged snapshot timestamp. Backlog samples are absent until the first successful query.
+
+Outbox gauges describe the shared Session database: do not sum them across replicas; use the
+freshest successful snapshot or an appropriate `max` aggregation. Publication counters are
+local to each replica and can be summed as rates. An `accepted` attempt means broker acceptance,
+not delivery to Player or a successful local database acknowledgement. If acknowledgement
+fails, another attempt may be counted for the same event. No message or session IDs are labels.
+
+Other outgoing business RPC metrics and shared Prometheus scraping configuration are separate
+changes.
+
+#### Postman collection
+
+The REST API can be tested using the [Session Postman collection](postman/pad-team-17-server-moderation-session.postman_collection.json).
+
+---
 
 ### Applicant Service
 
