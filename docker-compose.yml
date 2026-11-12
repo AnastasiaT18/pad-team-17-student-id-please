@@ -17,23 +17,6 @@ name: pad-team-17
 services:
   # ---------------------------------------------------------------- infrastructure
 
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    container_name: pad17-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    ports:
-      - "5672:5672" # AMQP
-      - "15672:15672" # management UI
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   player-db:
     image: postgres:17-alpine
     container_name: pad17-player-db
@@ -534,7 +517,6 @@ services:
 
 volumes:
   message-broker-data:
-  rabbitmq-data:
   player-db-data:
   server-moderation-session-db-data:
   applicant-db-data:

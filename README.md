@@ -16,7 +16,7 @@ The system is split into 8 microservices, each owning a distinct piece of the ga
 
 The **CPR repository** is the integration point. `docker-compose.yml` starts the eight application
 services (two replicas each), API Gateway, Message Broker, Service Discovery, PostgreSQL databases,
-RabbitMQ (until every service publishes through the broker), Redis, and the Discord DMs reverse proxy. Services run from their published Docker Hub images;
+Redis, and the Discord DMs reverse proxy. Services run from their published Docker Hub images;
 Git submodules pin the source-code revisions for review and traceability, rather than building
 those services locally.
 
@@ -24,7 +24,7 @@ those services locally.
 cp .env.example .env
 ```
 
-Edit `.env` with the shared database passwords, RabbitMQ credentials, JWT secret, and (optionally)
+Edit `.env` with the shared database passwords, JWT secret, and (optionally)
 the Telegram bot settings. **Never commit `.env` or real tokens.** Then run:
 
 ```bash
@@ -41,7 +41,6 @@ docker compose ps
 | Discord DMs reverse proxy | `http://localhost:8086` | Socket.IO connections and Discord health checks |
 | Grafana | `http://localhost:3001` | The monitoring dashboard: metrics and logs - see [Monitoring](#monitoring-prometheus-loki-and-grafana-lab-4) |
 | Prometheus | `http://localhost:9091` | What is collected (`/targets`), the alerts (`/alerts`) and queries |
-| RabbitMQ management | `http://localhost:15672` | Broker administration (credentials from `.env`) |
 | Service Discovery | `http://discovery-service:8000` inside Compose | Internal registration, lookup, and health monitoring; not exposed on the host |
 
 Moderation and Discord DMs are **not** given fixed `container_name` or published host ports:
@@ -3086,8 +3085,8 @@ the broker's gRPC server is `message-broker:9090` on the Compose network.
 | `shift_ended` | Server Moderation Session | Player |
 | `decision_made` | Moderation | Server Moderation Session, University Record |
 
-The topics are the RabbitMQ routing keys of Lab 3, and the payloads did not change. RabbitMQ stays in
-the Compose file until every service publishes through the broker.
+The topics are the RabbitMQ routing keys of Lab 3, and the payloads did not change. Every service
+now publishes through the broker, so RabbitMQ is no longer part of the Compose file.
 
 **Topics and dead letters**
 
