@@ -39,3 +39,19 @@ groups:
           severity: warning
         annotations:
           summary: "Events went to the dead letters in the last 5 minutes - see GET /dead-letters"
+
+      - alert: SessionOutboxRejected
+        expr: max(session_outbox_rejected) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Session has permanently rejected outbox publications"
+
+      - alert: SessionOutboxMetricsUnavailable
+        expr: session_outbox_collection_success == 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Session outbox collection failed on {{ $labels.instance }}"
