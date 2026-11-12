@@ -394,12 +394,14 @@ services:
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
       SERVER_RULES_GRPC_URL: server-rules-service:9090
 
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      # The Moderation service publishes decision_made via the custom broker.
+      DECISION_EVENT_TRANSPORT: broker-grpc
+      BROKER_GRPC_TARGET: message-broker:9090
 
     depends_on:
       moderation-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
       discovery-service:
         condition: service_healthy

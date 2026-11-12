@@ -49,6 +49,21 @@
       "key": "decision_id",
       "value": "",
       "description": ""
+    },
+    {
+      "key": "prometheus_url",
+      "value": "http://localhost:9091",
+      "description": "CPR Prometheus endpoint (read-only query API)."
+    },
+    {
+      "key": "expected_moderation_replicas",
+      "value": "2",
+      "description": "Expected deployed Moderation replicas in CPR."
+    },
+    {
+      "key": "moderation_success_baseline",
+      "value": "",
+      "description": "Captured by the Lab 4 publication baseline request."
     }
   ],
   "item": [
@@ -238,6 +253,194 @@
               "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
             ]
           }
+        }
+      ]
+    },
+    {
+      "name": "Lab 4 - Moderation observability and broker publication",
+      "description": "Checks exclusively Moderation metrics collected by CPR Prometheus. No Session, DMs, Player, Applicant or Credential service requests are changed. Requires CPR Prometheus running at {{prometheus_url}}, with the Moderation scrape job installed and a published Moderation image that exposes /metrics. For event verification, first run request 04 to capture the success baseline; then run the existing \"Submit one final decision\" request with a fresh applicant and real moderator JWT (this is irreversible); wait at least two Prometheus scrape intervals (typically 15-20 seconds) and run request 05. This only confirms a broker publication was acknowledged, not delivery or consumption by another service. Do not use the collection runner to treat the requests as a single automated end-to-end test, because the baseline capture must occur before the original decision submission.",
+      "item": [
+        {
+          "name": "01. Moderation replica scrape status",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=up%7Bjob%3D%22moderation-service%22%7D",
+            "description": "The CPR deploys two Moderation replicas. Check targets are discovered and scrape is successful."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Prometheus returned a successful query', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('success');",
+                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
+                  "});",
+                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
+                  "  const result = pm.response.json().data.result;",
+                  "  const expected = Number(pm.collectionVariables.get('expected_moderation_replicas') || 2);",
+                  "  pm.test('Expected Moderation targets discovered', () => pm.expect(result.length).to.be.at.least(expected));",
+                  "  pm.test('Every Moderation target is UP', () => {",
+                  "    pm.expect(result.length).to.be.at.least(expected);",
+                  "    result.forEach(row => pm.expect(Number(row.value[1])).to.eql(1));",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02. Moderation PostgreSQL outbox query health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=moderation_outbox_query_success%7Bjob%3D%22moderation-service%22%7D",
+            "description": "A gauge of 1 means the query for pending Moderation outbox rows succeeded."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Prometheus returned a successful query', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('success');",
+                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
+                  "});",
+                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
+                  "  const result = pm.response.json().data.result;",
+                  "  const expected = Number(pm.collectionVariables.get('expected_moderation_replicas') || 2);",
+                  "  pm.test('Outbox query metric from Moderation replicas', () => pm.expect(result.length).to.be.at.least(expected));",
+                  "  pm.test('All reported outbox database queries succeed', () => {",
+                  "    pm.expect(result.length).to.be.at.least(expected);",
+                  "    result.forEach(row => pm.expect(Number(row.value[1])).to.eql(1));",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03. Inspect Moderation pending outbox events",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=moderation_outbox_pending%7Bjob%3D%22moderation-service%22%7D",
+            "description": "Diagnostic only: pending events may temporarily exceed zero while delivery is in progress."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Prometheus returned a successful query', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('success');",
+                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
+                  "});",
+                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
+                  "  const result = pm.response.json().data.result;",
+                  "  pm.test('Outbox backlog metric present', () => pm.expect(result.length).to.be.above(0));",
+                  "  pm.test('Outbox backlog contains valid non-negative counts', () => {",
+                  "    result.forEach(row => pm.expect(Number(row.value[1])).to.be.at.least(0));",
+                  "  });",
+                  "  console.log('Moderation pending outbox per replica:', result.map(row => ({instance: row.metric.instance, pending: Number(row.value[1])})));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04. Capture Moderation broker success baseline",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28moderation_event_publications_total%7Bjob%3D%22moderation-service%22%2Cresult%3D%22success%22%7D%29",
+            "description": "Run BEFORE the existing irreversible \"Submit one final decision\" request. Saves the success counter baseline."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Prometheus returned a successful query', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('success');",
+                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
+                  "});",
+                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
+                  "  const result = pm.response.json().data.result;",
+                  "  pm.test('Publication counter exists', () => pm.expect(result.length).to.eql(1));",
+                  "  if (result.length === 1) {",
+                  "    const value = Number(result[0].value[1]);",
+                  "    pm.test('Publication counter is non-negative', () => pm.expect(value).to.be.at.least(0));",
+                  "    pm.collectionVariables.set('moderation_success_baseline', String(value));",
+                  "    console.log('Saved Moderation broker publication baseline:', value);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05. Verify Moderation broker success counter increased",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28moderation_event_publications_total%7Bjob%3D%22moderation-service%22%2Cresult%3D%22success%22%7D%29",
+            "description": "Run AFTER a new decision was submitted and after at least two Prometheus scrapes (typically 15-20 seconds). An increasing success counter supports broker acknowledgement, not consumer delivery. It is a global counter, so other concurrent moderation events can also increase it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Prometheus returned a successful query', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('success');",
+                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
+                  "});",
+                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
+                  "  const result = pm.response.json().data.result;",
+                  "  const baselineText = pm.collectionVariables.get('moderation_success_baseline');",
+                  "  pm.test('Baseline was captured in request 04', () => pm.expect(baselineText).to.not.be.oneOf([undefined, null, '']));",
+                  "  pm.test('Moderation broker publication advanced', () => {",
+                  "    pm.expect(result.length).to.eql(1);",
+                  "    pm.expect(baselineText).to.not.be.oneOf([undefined, null, '']);",
+                  "    pm.expect(Number(result[0].value[1])).to.be.above(Number(baselineText));",
+                  "  });",
+                  "  console.log('Moderation broker success total:', result.length ? result[0].value[1] : 'missing');",
+                  "}"
+                ]
+              }
+            }
+          ]
         }
       ]
     }

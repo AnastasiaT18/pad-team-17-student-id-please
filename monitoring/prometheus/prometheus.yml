@@ -73,3 +73,12 @@ scrape_configs:
         type: A
         port: 3001
         refresh_interval: 10s
+
+  # Moderation and Discord DMs Service metrics.
+  - job_name: moderation-service
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["moderation-service"]
+        type: A
+        port: 3000
+        refresh_interval: 10s
