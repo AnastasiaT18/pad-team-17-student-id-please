@@ -256,7 +256,7 @@ services:
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.0.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.1.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
@@ -282,7 +282,7 @@ services:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.0.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.1.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432
