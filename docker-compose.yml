@@ -359,6 +359,7 @@ services:
 
     environment:
       PORT: 3000
+      LOG_DOWNLOAD_TOKEN: ${MODERATION_LOG_DOWNLOAD_TOKEN:?Set Moderation log download token}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
       GRPC_DISCOVERY_ENABLED: "true"
@@ -399,6 +400,7 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET:?Set the shared JWT signing secret}
       PORT: 3000
+      LOG_DOWNLOAD_TOKEN: ${DISCORD_DMS_LOG_DOWNLOAD_TOKEN:?Set Discord DMs log download token}
       GRPC_URL: 0.0.0.0:9090
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
