@@ -65,7 +65,7 @@ rebuild, pull, or deploy the Docker image.
 - **Service Discovery:** each instance registers at startup and renews registration periodically;
   the health monitor verifies instances and exposes only their `healthy` state to callers.
   Registration heartbeats restore instances after a Discovery restart or deregistration.
-- **Moderation:** two replicas share PostgreSQL and RabbitMQ. The updated service supports
+- **Moderation:** two replicas share PostgreSQL. Final decisions and `decision_made` events are persisted in a PostgreSQL transactional outbox, then published to the custom Message Broker over gRPC. The updated service supports
   instance-aware gRPC routing and per-instance circuit breakers for Applicant, Credential,
   University Record, and Server Rules. `GRPC_DISCOVERY_ENABLED=true` is set in the supplied CPR Compose.
   All four dependencies must advertise healthy gRPC instances in Discovery. The service
@@ -2300,11 +2300,11 @@ For each submitted verdict, it gathers applicant information, credentials, and u
 
 The Moderation Service does not define the rules that determine whether an applicant should be accepted, rejected, flagged, or banned. That responsibility belongs to the Server Rules Service.
 
-The consumer listens on queue `player-service.shift_ended`, bound to the shared topic exchange `pad17.events` with routing key `shift_ended`. A message that fails validation or processing is rejected without requeue. The handling logic (`PlayersService.applyShiftEnded`) is covered by a unit test (`players.service.spec.ts`).
+Moderation stores final decisions and pending `decision_made` events in PostgreSQL within the same transaction. Its outbox worker publishes events to the custom Message Broker over gRPC; unsuccessful publications remain pending for retry. The Message Broker is responsible for dispatching events to subscribers.
 
 #### Requirements
 
-The service is built with TypeScript, NestJS, TypeORM, PostgreSQL, gRPC, and RabbitMQ. For
+The service is built with TypeScript, NestJS, TypeORM, PostgreSQL, and gRPC integration with the custom Message Broker. For
 standalone development use Node.js 24+, npm and PostgreSQL 16+; the shared CPR deployment uses
 published Docker images instead of building from each private source repository.
 
@@ -2335,8 +2335,7 @@ passes the trusted player identity to downstream services.
 **gRPC:** Moderation gathers applicant details from Applicant, Credential and University Record,
 then asks Server Rules to evaluate the result. The deployed service supports real gRPC clients.
 Its optional discovery-backed router (`GRPC_DISCOVERY_ENABLED=true`) selects healthy instances,
-tracks failures per instance, and applies circuit breakers; with the flag left unset in CPR,
-the configured static addresses remain in use:
+tracks failures per instance, and applies circuit breakers. CPR sets `GRPC_DISCOVERY_ENABLED=true`; the static addresses are available for configurations where discovery-backed routing is disabled:
 
 ```text
 APPLICANT_GRPC_URL=applicant-service:9090
@@ -2349,8 +2348,7 @@ Only enable discovery-backed gRPC after all four destinations have healthy entri
 `grpc_port` in `GET /services/{service_name}`. A gRPC business error is not the same as an
 infrastructure outage and should not trip a circuit breaker.
 
-**RabbitMQ:** Moderation publishes `decision_made` after persisting the decision, allowing the
-Session Service to advance the shift without a synchronous callback.
+**Asynchronous events (custom Message Broker over gRPC):** Moderation persists the decision and its `decision_made` event in the transactional outbox. A background publisher sends the event to `message-broker:9090` over gRPC and retries until the broker acknowledges it. The broker then handles subscriber delivery; this is not a synchronous Session callback.
 
 #### Decisions REST API
 
