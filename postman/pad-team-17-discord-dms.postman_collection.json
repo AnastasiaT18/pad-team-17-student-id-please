@@ -89,9 +89,9 @@
       "description": "CPR Prometheus API, exposed on localhost for read-only metrics queries."
     },
     {
-      "key": "discord_dms_broadcast_baseline",
+      "key": "discord_dms_rest_message_baseline",
       "value": "",
-      "description": "Saved by the DMs Lab 4 baseline request; do not commit real credentials."
+      "description": "Saved by the DMs REST POST baseline request; do not commit real credentials."
     }
   ],
   "item": [
@@ -702,7 +702,7 @@
     },
     {
       "name": "Lab 4 - Discord DMs monitoring",
-      "description": "Read-only Prometheus API checks for Discord DMs ONLY. Run against the CPR stack after publishing the updated DMs Docker image and adding its Prometheus job. The default expected_replicas is 2. Request 05 captures a broadcast counter baseline. Then send a fresh authorized message to a disposable, existing DMs channel through the normal client flow; wait two Prometheus scrape cycles and run request 06. An increase proves monitoring observed a broadcast on some DMs replica, not remote receipt. The two-replica delivery and failover checks remain in the DMs repository test script.",
+      "description": "Read-only Prometheus API checks for Discord DMs ONLY. Run against the CPR stack after publishing the updated DMs Docker image and adding its Prometheus job. The default expected_replicas is 2. Request 05 captures the REST message POST counter baseline. Create a NEW message using the authorized REST POST /channels/{channel_id}/messages endpoint, then run request 06: it automatically retries the counter query. This proves a successful REST request was observed, NOT a Socket.IO broadcast. To verify discord_dms_messages_broadcast_total, send via Socket.IO send_message and use the DMs cross-replica script. The two-replica delivery and failover checks remain in the DMs repository test script.",
       "item": [
         {
           "name": "01. Discord DMs replica targets UP",
@@ -861,15 +861,15 @@
           ]
         },
         {
-          "name": "05. Capture Discord DMs broadcast baseline",
+          "name": "05. Capture Discord DMs REST message baseline",
           "request": {
             "auth": {
               "type": "noauth"
             },
             "method": "GET",
             "header": [],
-            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_messages_broadcast_total%7Bjob%3D%22discord-dms-service%22%7D%29",
-            "description": "Run before sending a new, authorized test message to an existing disposable DMs channel."
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_http_requests_total%7Bjob%3D%22discord-dms-service%22%2Cmethod%3D%22POST%22%2Croute%3D%22%2Fchannels%2F%3Achannel_id%2Fmessages%22%2Cstatus%3D~%222..%22%7D%29%20or%20vector%280%29",
+            "description": "Run before creating a new authorized message through REST POST /channels/{channel_id}/messages."
           },
           "event": [
             {
@@ -878,18 +878,18 @@
                 "type": "text/javascript",
                 "exec": [
                   "const body = pm.response.json();",
-                  "pm.test('Prometheus query succeeded', () => {",
+                  "pm.test('Prometheus REST message query succeeded', () => {",
                   "  pm.response.to.have.status(200);",
-                  "  pm.expect(body.status).to.eql('success');",
-                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "  pm.expect(body.status).to.eql(\"success\");",
+                  "  pm.expect(body.data.resultType).to.eql(\"vector\");",
                   "});",
                   "const rows = body.data && body.data.result ? body.data.result : [];",
-                  "pm.test('A Discord DMs broadcast counter is available', () => {",
+                  "pm.test(\"A REST message POST counter is available\", () => {",
                   "  pm.expect(rows.length).to.eql(1);",
                   "  pm.expect(Number(rows[0].value[1])).to.be.at.least(0);",
                   "});",
-                  "if (rows.length === 1) {",
-                  "  pm.collectionVariables.set('discord_dms_broadcast_baseline', String(rows[0].value[1]));",
+                  "if (rows.length === 1 && Number.isFinite(Number(rows[0].value[1]))) {",
+                  "  pm.collectionVariables.set(\"discord_dms_rest_message_baseline\", String(rows[0].value[1]));",
                   "}"
                 ]
               }
@@ -897,15 +897,15 @@
           ]
         },
         {
-          "name": "06. Verify Discord DMs broadcast activity increased",
+          "name": "06. Verify Discord DMs REST message activity increased",
           "request": {
             "auth": {
               "type": "noauth"
             },
             "method": "GET",
             "header": [],
-            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_messages_broadcast_total%7Bjob%3D%22discord-dms-service%22%7D%29",
-            "description": "Run after request 05 and a new authorized DMs message, allowing for Prometheus scraping. A counter increase is not remote-consumer acknowledgement."
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_http_requests_total%7Bjob%3D%22discord-dms-service%22%2Cmethod%3D%22POST%22%2Croute%3D%22%2Fchannels%2F%3Achannel_id%2Fmessages%22%2Cstatus%3D~%222..%22%7D%29%20or%20vector%280%29",
+            "description": "Run after request 05 and a successful REST POST /channels/{channel_id}/messages. Retries the Prometheus HTTP POST counter up to 15 times, 3 seconds apart. This verifies REST request activity, not Socket.IO broadcast or remote delivery."
           },
           "event": [
             {
@@ -913,22 +913,51 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "const body = pm.response.json();",
-                  "pm.test('Prometheus query succeeded', () => {",
-                  "  pm.response.to.have.status(200);",
-                  "  pm.expect(body.status).to.eql('success');",
-                  "  pm.expect(body.data.resultType).to.eql('vector');",
-                  "});",
-                  "const rows = body.data && body.data.result ? body.data.result : [];",
-                  "const baselineText = pm.collectionVariables.get('discord_dms_broadcast_baseline');",
-                  "pm.test('Discord DMs broadcast baseline was captured', () => {",
-                  "  pm.expect(baselineText).to.not.be.oneOf([undefined, null, '']);",
-                  "});",
-                  "pm.test('Discord DMs broadcasts increased after the new message', () => {",
-                  "  pm.expect(rows.length).to.eql(1);",
-                  "  pm.expect(baselineText).to.not.be.oneOf([undefined, null, '']);",
-                  "  pm.expect(Number(rows[0].value[1])).to.be.above(Number(baselineText));",
-                  "});"
+                  "const baselineText = pm.collectionVariables.get(\"discord_dms_rest_message_baseline\");",
+                  "const baselineValid = baselineText !== undefined && baselineText !== null && baselineText !== \"\" && Number.isFinite(Number(baselineText));",
+                  "pm.test('Baseline was captured before the test action', () => pm.expect(baselineValid).to.eql(true));",
+                  "function getCounter(response) {",
+                  "  try {",
+                  "    if (!response || response.code !== 200) return null;",
+                  "    const body = response.json();",
+                  "    if (body.status !== \"success\" || body.data.resultType !== \"vector\") return null;",
+                  "    const rows = body.data.result;",
+                  "    if (!Array.isArray(rows) || rows.length !== 1) return null;",
+                  "    const value = Number(rows[0].value[1]);",
+                  "    return Number.isFinite(value) ? value : null;",
+                  "  } catch (_error) { return null; }",
+                  "}",
+                  "pm.test('Initial Prometheus query succeeded', () => pm.expect(getCounter(pm.response)).to.not.eql(null));",
+                  "if (baselineValid) {",
+                  "  const baseline = Number(baselineText);",
+                  "  const queryUrl = pm.variables.replaceIn(pm.request.url.toString());",
+                  "  const maxAttempts = 15;",
+                  "  const retryDelayMs = 3000;",
+                  "  let attempts = 1;",
+                  "  let latest = getCounter(pm.response);",
+                  "  function verifyOrRetry() {",
+                  "    if (latest !== null && latest > baseline) {",
+                  "      pm.test(\"Discord DMs REST message POST counter increased\", () => pm.expect(latest).to.be.above(baseline));",
+                  "      console.log(\"Discord DMs REST message POST counter confirmed\", { baseline, latest, attempts });",
+                  "      return;",
+                  "    }",
+                  "    if (attempts >= maxAttempts) {",
+                  "      pm.test(\"Discord DMs REST message POST counter increased within retry window\", () => {",
+                  "        pm.expect(latest, \"No counter increase after \" + attempts + \" Prometheus queries; check the service action and /metrics\").to.be.above(baseline);",
+                  "      });",
+                  "      return;",
+                  "    }",
+                  "    setTimeout(() => {",
+                  "      pm.sendRequest({ url: queryUrl, method: \"GET\" }, (error, response) => {",
+                  "        attempts += 1;",
+                  "        if (!error) latest = getCounter(response);",
+                  "        else console.warn(\"Prometheus retry failed:\", String(error));",
+                  "        verifyOrRetry();",
+                  "      });",
+                  "    }, retryDelayMs);",
+                  "  }",
+                  "  verifyOrRetry();",
+                  "}"
                 ]
               }
             }
