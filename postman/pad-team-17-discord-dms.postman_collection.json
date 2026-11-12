@@ -1,15 +1,15 @@
 {
   "info": {
     "_postman_id": "8d1e7c28-9f24-4ac6-8d43-3ab1d2a80d01",
-    "name": "Discord DMs — Lab 3",
-    "description": "# Discord DMs — Lab 3 Postman collection\n\nContains the original HTTP API examples plus read-only checks for Health and Service Discovery, including two-replica validation and recovery after a Discovery restart.\n\n**API URL:** Set `base_url` to a directly reachable instance (default `http://localhost:3000` for standalone development). The CPR Compose deployment does not publish Moderation HTTP ports, and the future two-replica Discord deployment should not publish a fixed `8086:3000` port. For end-to-end API requests use a Gateway URL only when that Gateway exposes the relevant endpoint and configure any required authentication.\n\n**Discovery URL:** `discovery_url` defaults to `http://localhost:18000`. Discovery is only reachable inside the CPR Docker network unless you publish/forward its port; do not expose it publicly.\n\n**Real data:** Set the IDs from a real created shift/session and its applicant/player before running the functional API workflow. An arbitrary UUID is not proof of an existing record.\n\n**Replica checks:** Run `Lab 3 - Service Discovery / 3. Verify Registered Replicas` only after deployment and health checks; `expected_replicas` defaults to 2. To test restart recovery, run `4. Capture IDs Before Discovery Restart`, restart only Discovery in Docker, allow the heartbeat interval (15s) and health monitor to complete, then run `5. Verify IDs After Discovery Restart`. The collection does not restart containers or attempt to re-register instances itself.\n\n**Important:** Discovery API checks verify service registration and health, *not* complete HTTP load balancing, gRPC circuit-breaking, or Socket.IO Redis cross-replica fan-out.\n\nThe pre-existing `Provision Session Channels` request documents an old mocked-Session flow; check whether that endpoint uses a real Session Service in the currently deployed version.\n",
+    "name": "Discord DMs \u2014 Lab 3",
+    "description": "Requires the Discord REST permissions release. Use Gateway base_url=http://localhost:8090 and set token to a real login JWT, player_id to its subject and session_id to a dedicated test session. Start the session through Session Service, then set channel_id to one of its provisioned channels containing that player. Run Channels then Messages. Public channel creation/update/deletion must return 403; REST provisioning must return 410. Message operations create, edit and delete only this run's test message. Provisioned channels remain in place. Do not run these mutation checks against an older deployment. Discovery checks are optional: discovery_url is empty because CPR does not publish it. Supply an explicitly reachable address. Recovery checks need a manual Discovery restart between baseline/recovery requests. HTTP checks do not establish Socket.IO authentication, cross-replica delivery or complete authorization coverage. Do not commit tokens.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:3000",
-      "description": "Direct service HTTP URL in standalone mode; use reachable proxy/Gateway for deployed API routes."
+      "value": "http://localhost:8090",
+      "description": "Authenticated Gateway URL"
     },
     {
       "key": "session_id",
@@ -24,7 +24,7 @@
     {
       "key": "channel_id",
       "value": "",
-      "description": "Set automatically after successful Create Channel."
+      "description": "Set to an existing Session-provisioned channel containing the authenticated player; never overwritten by mutation checks."
     },
     {
       "key": "message_id",
@@ -33,9 +33,9 @@
     },
     {
       "key": "discovery_url",
-      "value": "http://localhost:18000",
+      "value": "",
       "type": "string",
-      "description": "Host-local Discovery URL, forwarded from CPR container; not published by default."
+      "description": "Optional explicitly reachable Discovery URL; not published by CPR"
     },
     {
       "key": "expected_replicas",
@@ -72,6 +72,26 @@
       "value": "",
       "type": "string",
       "description": "Set from second registered instance in the Discovery replica check."
+    },
+    {
+      "key": "token",
+      "value": "",
+      "description": ""
+    },
+    {
+      "key": "discord_proxy_url",
+      "value": "http://localhost:8086",
+      "description": ""
+    },
+    {
+      "key": "prometheus_url",
+      "value": "http://localhost:9091",
+      "description": "CPR Prometheus API, exposed on localhost for read-only metrics queries."
+    },
+    {
+      "key": "discord_dms_rest_message_baseline",
+      "value": "",
+      "description": "Saved by the DMs REST POST baseline request; do not commit real credentials."
     }
   ],
   "item": [
@@ -79,19 +99,14 @@
       "name": "Channels",
       "item": [
         {
-          "name": "Create Channel",
+          "name": "Reject create channel",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Channel created', () => pm.response.to.have.status(201));",
-                  "if (pm.response.code === 201) {",
-                  "  const response = pm.response.json();",
-                  "  if (response.id) pm.collectionVariables.set('channel_id', response.id);",
-                  "  pm.test('Created channel ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
-                  "}"
+                  "pm.test('Channel mutation denied', () => pm.response.to.have.status(403));"
                 ]
               }
             }
@@ -117,7 +132,7 @@
                 "channels"
               ]
             },
-            "description": "Requires a real session_id and player_id. A successful response stores channel_id. When testing in CPR, use a reachable service/Gateway HTTP route."
+            "description": "Session manages channels; players cannot perform this mutation. Requires the updated permissions release."
           }
         },
         {
@@ -133,7 +148,18 @@
                 "channels"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Channel",
@@ -149,7 +175,18 @@
                 "{{channel_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Session Channels",
@@ -166,46 +203,28 @@
                 "channels"
               ]
             }
-          }
-        },
-        {
-          "name": "Provision Session Channels",
+          },
           "event": [
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status code is 201', function () {",
-                  "    pm.response.to.have.status(201);",
-                  "});",
-                  "",
-                  "pm.test('Four channels are provisioned', function () {",
-                  "    const channels = pm.response.json();",
-                  "",
-                  "    pm.expect(channels).to.be.an('array');",
-                  "    pm.expect(channels).to.have.length(4);",
-                  "});",
-                  "",
-                  "pm.test('Expected channels are present', function () {",
-                  "    const channels = pm.response.json();",
-                  "    const names = channels.map((channel) => channel.name);",
-                  "",
-                  "    pm.expect(names).to.include.members([",
-                  "        'enrollment-check',",
-                  "        'course-registration',",
-                  "        'schedule-check',",
-                  "        'general-mod-chat'",
-                  "    ]);",
-                  "});",
-                  "",
-                  "pm.test('All provisioned channels belong to the session', function () {",
-                  "    const channels = pm.response.json();",
-                  "    const sessionId = pm.collectionVariables.get('session_id');",
-                  "",
-                  "    channels.forEach((channel) => {",
-                  "        pm.expect(channel.session_id).to.eql(sessionId);",
-                  "    });",
-                  "});"
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject REST session provisioning",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('REST provisioning retired', () => pm.response.to.have.status(410));"
                 ]
               }
             }
@@ -225,11 +244,11 @@
                 "provision"
               ]
             },
-            "description": "Legacy request carried forward from the supplied collection. That collection described this as a Lab 1 mocked Session Service provisioning flow with four fixed channels. Verify the live service implementation before considering the 4-channel assertion an integration test of real Session Service functionality."
+            "description": "Session owns provisioning through internal gRPC. This retired REST route must not overwrite memberships."
           }
         },
         {
-          "name": "Update Channel",
+          "name": "Reject update channel",
           "request": {
             "method": "PATCH",
             "header": [
@@ -251,11 +270,23 @@
                 "channels",
                 "{{channel_id}}"
               ]
+            },
+            "description": "Session manages channels; players cannot perform this mutation. Requires the updated permissions release."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Channel mutation denied', () => pm.response.to.have.status(403));"
+                ]
+              }
             }
-          }
+          ]
         },
         {
-          "name": "Delete Channel",
+          "name": "Reject delete channel",
           "request": {
             "method": "DELETE",
             "url": {
@@ -267,8 +298,20 @@
                 "channels",
                 "{{channel_id}}"
               ]
+            },
+            "description": "Session manages channels; players cannot perform this mutation. Requires the updated permissions release."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Channel mutation denied', () => pm.response.to.have.status(403));"
+                ]
+              }
             }
-          }
+          ]
         }
       ]
     },
@@ -289,6 +332,15 @@
                   "  if (response.id) pm.collectionVariables.set('message_id', response.id);",
                   "  pm.test('Created message ID exists', () => pm.expect(response.id).to.be.a('string').and.not.empty);",
                   "}"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.unset('message_id');"
                 ]
               }
             }
@@ -334,7 +386,18 @@
                 "messages"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Message",
@@ -352,7 +415,18 @@
                 "{{message_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Update Message",
@@ -380,7 +454,18 @@
                 "{{message_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Delete Message",
@@ -398,7 +483,18 @@
                 "{{message_id}}"
               ]
             }
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -421,7 +517,8 @@
                   "    pm.expect(body).to.be.an('object');",
                   "    pm.expect(body.status).to.eql('UP');",
                   "  });",
-                  "}"
+                  "}",
+                  "pm.test('Discord health identity', () => pm.expect(pm.response.json().service).to.eql('discord-dms-service'));"
                 ]
               }
             }
@@ -429,16 +526,11 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": {
-              "raw": "{{base_url}}/health",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "health"
-              ]
-            },
-            "description": "Direct service health check; with base_url pointed at a Gateway this could check the Gateway instead. Use a direct instance URL if you need the actual service health endpoint."
+            "url": "{{discord_proxy_url}}/health",
+            "description": "Discord health through its public proxy.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -466,7 +558,10 @@
                 "health"
               ]
             },
-            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description)."
+            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description).",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -513,7 +608,10 @@
                 "discord-dms-service"
               ]
             },
-            "description": "Checks discord-dms-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart."
+            "description": "Checks discord-dms-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -553,7 +651,10 @@
                 "discord-dms-service"
               ]
             },
-            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check."
+            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         },
         {
@@ -591,10 +692,288 @@
                 "discord-dms-service"
               ]
             },
-            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary."
+            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary.",
+            "auth": {
+              "type": "noauth"
+            }
           }
         }
       ]
+    },
+    {
+      "name": "Lab 4 - Discord DMs monitoring",
+      "description": "Read-only Prometheus API checks for Discord DMs ONLY. Run against the CPR stack after publishing the updated DMs Docker image and adding its Prometheus job. The default expected_replicas is 2. Request 05 captures the REST message POST counter baseline. Create a NEW message using the authorized REST POST /channels/{channel_id}/messages endpoint, then run request 06: it automatically retries the counter query. This proves a successful REST request was observed, NOT a Socket.IO broadcast. To verify discord_dms_messages_broadcast_total, send via Socket.IO send_message and use the DMs cross-replica script. The two-replica delivery and failover checks remain in the DMs repository test script.",
+      "item": [
+        {
+          "name": "01. Discord DMs replica targets UP",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=up%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "Each DMs replica must be independently scraped and report UP=1."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Every Discord DMs target is UP', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.eql(1));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02. Discord DMs Redis adapter ready",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=discord_dms_redis_adapter_ready%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "Both Redis Socket.IO Pub/Sub clients must be ready on each DMs replica."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Redis adapter ready on each Discord DMs replica', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.eql(1));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03. Discord DMs active Socket.IO connections",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=discord_dms_socket_connections%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "Reads per-replica active authenticated socket connection gauges."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Active Socket.IO connections is non-negative on every replica', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.be.at.least(0));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04. Discord DMs task capacity",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=discord_dms_task_capacity%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "CPR sets MAX_CONCURRENT_TASKS=20 for Discord DMs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Each Discord DMs replica has capacity 20', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.eql(20));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05. Capture Discord DMs REST message baseline",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_http_requests_total%7Bjob%3D%22discord-dms-service%22%2Cmethod%3D%22POST%22%2Croute%3D%22%2Fchannels%2F%3Achannel_id%2Fmessages%22%2Cstatus%3D~%222..%22%7D%29%20or%20vector%280%29",
+            "description": "Run before creating a new authorized message through REST POST /channels/{channel_id}/messages."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus REST message query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql(\"success\");",
+                  "  pm.expect(body.data.resultType).to.eql(\"vector\");",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "pm.test(\"A REST message POST counter is available\", () => {",
+                  "  pm.expect(rows.length).to.eql(1);",
+                  "  pm.expect(Number(rows[0].value[1])).to.be.at.least(0);",
+                  "});",
+                  "if (rows.length === 1 && Number.isFinite(Number(rows[0].value[1]))) {",
+                  "  pm.collectionVariables.set(\"discord_dms_rest_message_baseline\", String(rows[0].value[1]));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06. Verify Discord DMs REST message activity increased",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_http_requests_total%7Bjob%3D%22discord-dms-service%22%2Cmethod%3D%22POST%22%2Croute%3D%22%2Fchannels%2F%3Achannel_id%2Fmessages%22%2Cstatus%3D~%222..%22%7D%29%20or%20vector%280%29",
+            "description": "Run after request 05 and a successful REST POST /channels/{channel_id}/messages. Retries the Prometheus HTTP POST counter up to 15 times, 3 seconds apart. This verifies REST request activity, not Socket.IO broadcast or remote delivery."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const baselineText = pm.collectionVariables.get(\"discord_dms_rest_message_baseline\");",
+                  "const baselineValid = baselineText !== undefined && baselineText !== null && baselineText !== \"\" && Number.isFinite(Number(baselineText));",
+                  "pm.test('Baseline was captured before the test action', () => pm.expect(baselineValid).to.eql(true));",
+                  "function getCounter(response) {",
+                  "  try {",
+                  "    if (!response || response.code !== 200) return null;",
+                  "    const body = response.json();",
+                  "    if (body.status !== \"success\" || body.data.resultType !== \"vector\") return null;",
+                  "    const rows = body.data.result;",
+                  "    if (!Array.isArray(rows) || rows.length !== 1) return null;",
+                  "    const value = Number(rows[0].value[1]);",
+                  "    return Number.isFinite(value) ? value : null;",
+                  "  } catch (_error) { return null; }",
+                  "}",
+                  "pm.test('Initial Prometheus query succeeded', () => pm.expect(getCounter(pm.response)).to.not.eql(null));",
+                  "if (baselineValid) {",
+                  "  const baseline = Number(baselineText);",
+                  "  const queryUrl = pm.variables.replaceIn(pm.request.url.toString());",
+                  "  const maxAttempts = 15;",
+                  "  const retryDelayMs = 3000;",
+                  "  let attempts = 1;",
+                  "  let latest = getCounter(pm.response);",
+                  "  function verifyOrRetry() {",
+                  "    if (latest !== null && latest > baseline) {",
+                  "      pm.test(\"Discord DMs REST message POST counter increased\", () => pm.expect(latest).to.be.above(baseline));",
+                  "      console.log(\"Discord DMs REST message POST counter confirmed\", { baseline, latest, attempts });",
+                  "      return;",
+                  "    }",
+                  "    if (attempts >= maxAttempts) {",
+                  "      pm.test(\"Discord DMs REST message POST counter increased within retry window\", () => {",
+                  "        pm.expect(latest, \"No counter increase after \" + attempts + \" Prometheus queries; check the service action and /metrics\").to.be.above(baseline);",
+                  "      });",
+                  "      return;",
+                  "    }",
+                  "    setTimeout(() => {",
+                  "      pm.sendRequest({ url: queryUrl, method: \"GET\" }, (error, response) => {",
+                  "        attempts += 1;",
+                  "        if (!error) latest = getCounter(response);",
+                  "        else console.warn(\"Prometheus retry failed:\", String(error));",
+                  "        verifyOrRetry();",
+                  "      });",
+                  "    }, retryDelayMs);",
+                  "  }",
+                  "  verifyOrRetry();",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  }
 }

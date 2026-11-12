@@ -17,23 +17,6 @@ name: pad-team-17
 services:
   # ---------------------------------------------------------------- infrastructure
 
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    container_name: pad17-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    ports:
-      - "5672:5672" # AMQP
-      - "15672:15672" # management UI
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   player-db:
     image: postgres:17-alpine
     container_name: pad17-player-db
@@ -162,23 +145,44 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.3.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.4.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
       DISCORD_DMS_PUBLIC_URL: http://localhost:8086
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
-      DISCOVERY_URL: http://discovery-service:8000
+      BROKER_URL: http://message-broker:8000
     depends_on:
-      discovery-service:
+      message-broker:
         condition: service_healthy
     ports:
       - "8090:8000"
 
+  # ---------------------------------------------------------------- message broker
+  message-broker:
+    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.1.0}
+    container_name: pad17-message-broker
+    environment:
+      DISCOVERY_URL: http://discovery-service:8000
+      EVENT_DB_PATH: /data/events.db
+    volumes:
+      - message-broker-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+    ports:
+      - "8100:8000" # optional: lets you open /health and /logs from your browser
+      
  # ---------------------------------------------------------------- discovery
   discovery-service:
-    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.1.0}
+    image: ${DISCOVERY_IMAGE:-dannacojocari/pad-team-17-discovery-service:0.2.0}
     container_name: pad17-discovery-service
     environment:
       # Health alerts also go to the developers' Telegram group, posted by the team's bot. The bot's
@@ -197,7 +201,7 @@ services:
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.3.0}
+    image: janetag/player-service:${PLAYER_VERSION:-0.4.1}
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -206,63 +210,63 @@ services:
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: 1h
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       PORT: 3000
+      GRPC_PORT: 9090
+      SERVICE_NAME: player-service
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      LOG_DIR: /logs
+    volumes:
+      - player-logs:/logs
     deploy:
       replicas: 2
     depends_on:
       player-db:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       discovery-service:
         condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.3.1}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.4.1}
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
       DB_NAME: server_moderation_session
       DB_USER: ${SERVER_MODERATION_SESSION_DB_USER}
       DB_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       APPLICANT_GRPC_URL: applicant-service:9090
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
       DISCORD_DMS_GRPC_URL: discord-dms-service:9090
       PORT: 3001
+      GRPC_PORT: 9090
+      SERVICE_NAME: server-moderation-session-service
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
+      BROKER_GRPC_URL: message-broker:9090
+      BROKER_PUBLISH_TIMEOUT_MS: 1500
+      LOG_DIR: /logs
+    volumes:
+      - session-logs:/logs
     deploy:
       replicas: 2
     depends_on:
       server-moderation-session-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
-      discovery-service:
-        condition: service_healthy
-
+     
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-3.1.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.1.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
       DB_NAME: applicant
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # Events are published to the Message Broker over gRPC, and it delivers the topics this service
+      # registers to its gRPC port. BROKER_URL is the broker's REST API, used if the gRPC address is empty.
+      BROKER_GRPC_ADDRESS: message-broker:9090
+      BROKER_URL: http://message-broker:8000
       SERVER_PORT: 8081
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
@@ -272,23 +276,23 @@ services:
     depends_on:
       applicant-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
       discovery-service:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-3.1.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.1.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432
       DB_NAME: credential
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # Events are published to the Message Broker over gRPC, and it delivers the topics this service
+      # registers to its gRPC port. BROKER_URL is the broker's REST API, used if the gRPC address is empty.
+      BROKER_GRPC_ADDRESS: message-broker:9090
+      BROKER_URL: http://message-broker:8000
       SERVER_PORT: 8082
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
@@ -298,14 +302,14 @@ services:
     depends_on:
       credential-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
       discovery-service:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.3.0}
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.4.0}
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
@@ -324,15 +328,11 @@ services:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.3.0}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.4.0}
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
       DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
       DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USERNAME: ${RABBITMQ_USER}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_NAME: university-record-service
       SERVICE_HTTP_PORT: 8080
@@ -345,20 +345,21 @@ services:
     depends_on:
       university-record-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker: 
         condition: service_healthy
       discovery-service:
         condition: service_healthy
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.4.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.5.0}
 
     deploy:
       replicas: 2
 
     environment:
       PORT: 3000
+      LOG_DOWNLOAD_TOKEN: ${MODERATION_LOG_DOWNLOAD_TOKEN:?Set Moderation log download token}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
       GRPC_DISCOVERY_ENABLED: "true"
@@ -377,25 +378,29 @@ services:
       UNIVERSITY_RECORD_GRPC_URL: university-record-service:9090
       SERVER_RULES_GRPC_URL: server-rules-service:9090
 
-      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      # The Moderation service publishes decision_made via the custom broker.
+      DECISION_EVENT_TRANSPORT: broker-grpc
+      BROKER_GRPC_TARGET: message-broker:9090
 
     depends_on:
       moderation-db:
         condition: service_healthy
-      rabbitmq:
+      message-broker:
         condition: service_healthy
       discovery-service:
         condition: service_healthy
 
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.4.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.5.0}
 
     deploy:
       replicas: 2
 
     environment:
+      JWT_SECRET: ${JWT_SECRET:?Set the shared JWT signing secret}
       PORT: 3000
+      LOG_DOWNLOAD_TOKEN: ${DISCORD_DMS_LOG_DOWNLOAD_TOKEN:?Set Discord DMs log download token}
       GRPC_URL: 0.0.0.0:9090
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       SERVICE_HEARTBEAT_SECONDS: 15
@@ -412,7 +417,7 @@ services:
 
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.discord.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.discord.rule=PathPrefix(`/socket.io/`) || Path(`/health`)"
       - "traefik.http.routers.discord.entrypoints=discord"
       - "traefik.http.routers.discord.service=discord"
       - "traefik.http.services.discord.loadbalancer.server.port=3000"
@@ -450,8 +455,70 @@ services:
     depends_on:
       - discord-dms-service
 
+  # ---------------------------------------------------------------- monitoring (Lab 4, Grade 10)
+  # Prometheus collects the metrics every 5 s (monitoring/prometheus), Alloy sends the logs of every
+  # container to Loki (monitoring/alloy, monitoring/loki), and Grafana shows both on the dashboard in
+  # monitoring/grafana/dashboards, set up when it starts.
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    container_name: pad17-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - message-broker
+    ports:
+      - "9091:9090" # the Prometheus UI: targets and queries
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    container_name: pad17-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # The dashboard opens without logging in, read-only; changes need the admin login.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/pad-team-17.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    ports:
+      - "3001:3000"
+
+  loki:
+    image: grafana/loki:3.7.9
+    container_name: pad17-loki
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.21.3
+    container_name: pad17-alloy
+    command: ["run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy/data"]
+    environment:
+      # Only the containers of this Compose project have their logs collected.
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only: Alloy lists the containers and reads their output, it changes nothing.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
 volumes:
-  rabbitmq-data:
+  message-broker-data:
   player-db-data:
   server-moderation-session-db-data:
   applicant-db-data:
@@ -460,3 +527,8 @@ volumes:
   university-record-db-data:
   moderation-db-data:
   discord-dms-db-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  player-logs:
+  session-logs:

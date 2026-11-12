@@ -1,0 +1,12 @@
+# Loads every dashboard in /etc/grafana/dashboards (monitoring/grafana/dashboards in this repository)
+# when Grafana starts. Change a dashboard in that folder, not in the Grafana UI: the file wins.
+apiVersion: 1
+
+providers:
+  - name: pad-team-17
+    folder: PAD Team 17
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

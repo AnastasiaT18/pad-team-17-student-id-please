@@ -2,7 +2,7 @@
   "info": {
     "name": "University Record Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "University Record Service, tested through the Gateway ([http://localhost:8090](http://localhost:8090)). Its own ports are not published, so the Gateway is the only way in.\n\nSELF-CONTAINED: folder 0 registers three throwaway players (moderator, junior, stranger), logs them in, opens a real session, lets the junior join and starts it. Starting the session makes Session Service call AssignScopes on University Record over gRPC, so no grpcurl or manual step is needed. Run the collection top to bottom with the Collection Runner (each run registers fresh players).\n\nWHAT IT PROVES\n\n- Folder 1: POST /records checks the session with Session Service (gRPC): 201 for a running session, 404 unknown, 409 not started, 422/400/401 for bad input.\n    \n- Folder 2: GET /sessions/{id}/records/{applicantId} returns only the caller's assigned scopes (200), 403 for a player that is not in the session, 404 unknown applicant, 401 without a token.\n    \n- Folder 3 (Lab 3, grades 4-5): two replicas behind the Gateway; round-robin alternates the replicas; a record written through one replica is readable through the other (the service is instance-agnostic).\n    \n- Folder 4 (Lab 3, grades 6 and 9): circuit breaker, manual, see its description.\n    \n\nREQUIRES the service to answer with an X-Instance-Id header (the container id). Folder 3 fails without it.\n\nNOT COVERED HERE\n\n- GET /health: it is polled by Service Discovery inside the Compose network and is not routed by the Gateway. Check it with: docker compose logs discovery-service\n    \n- gRPC (AssignScopes, GetRecordSnapshot): exercised indirectly by starting the session."
+    "description": "University Record Service, tested through the Gateway ([http://localhost:8090](http://localhost:8090)). Its own ports are not published: client requests go Gateway -> Message Broker -> service. Folder 5 talks to the Message Broker directly (http://localhost:8100) for the routes the Gateway does not expose.\n\nSELF-CONTAINED: folder 0 registers three throwaway players (moderator, junior, stranger), logs them in, opens a real session, lets the junior join and starts it. Starting the session makes Session Service call AssignScopes on University Record over gRPC, so no grpcurl or manual step is needed. Run the collection top to bottom with the Collection Runner (each run registers fresh players).\n\nWHAT IT PROVES\n\n- Folder 1: POST /records checks the session with Session Service (gRPC): 201 for a running session, 404 unknown, 409 not started, 422/400/401 for bad input.\n    \n- Folder 2: GET /sessions/{id}/records/{applicantId} returns only the caller's assigned scopes (200), 403 for a player that is not in the session, 404 unknown applicant, 401 without a token.\n    \n- Folder 3 (Lab 3, grades 4-5): two replicas behind the Gateway; round-robin alternates the replicas; a record written through one replica is readable through the other (the service is instance-agnostic).\n    \n- Folder 4 (Lab 3, grades 6 and 9): circuit breaker, manual, see its description.\n    \n\n- Folder 5 (Lab 4): logs download (grade 3), Prometheus metrics, and the topic events the broker delivers to POST /events/{topic} (grade 5). Needs the new image (RabbitMQ removed).\n\nNOTE: POST /records publishes record_initialized using broker.MessageBroker/Publish over gRPC at message-broker:9090. Use a broker image built from feat/broker-grpc-events and updated Applicant/Credential registrations subscribing to record_initialized. Missing subscribers still cause 503 UPSTREAM_UNAVAILABLE; gRPC does not fix missing subscriptions.\n\nREQUIRES the service to answer with an X-Instance-Id header (the container id). Folder 3 fails without it.\n\nNOT COVERED HERE\n\n- GET /health: it is polled by Service Discovery inside the Compose network and is not routed by the Gateway. Check it with: docker compose logs discovery-service\n    \n- gRPC (AssignScopes, GetRecordSnapshot): exercised indirectly by starting the session.\n\nFolder 5 event requests exercise the REST compatibility endpoint through the broker HTTP forwarding route. They do not prove gRPC EventSubscriber/Deliver. Import src/main/proto/message_broker.proto into a Postman gRPC request and call broker.EventSubscriber/Deliver on a locally exposed University Record gRPC port to verify delivery; see README. This service-local copy preserves the shared collection requests and tests."
   },
   "item": [
     {
@@ -967,7 +967,7 @@
     },
     {
       "name": "3. Lab 3 - two replicas behind the Gateway",
-      "description": "Run these requests back to back and alone (no other traffic in between), so the Gateway's round-robin order is predictable.",
+      "description": "Run these requests back to back and alone (no other traffic in between), so the round-robin order is predictable. In Lab 4 the round-robin is done by the Message Broker (Gateway -> broker -> service).",
       "item": [
         {
           "name": "Round-robin - first request",
@@ -1286,6 +1286,576 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "5. Lab 4 - logs, metrics and events (through the Message Broker)",
+      "description": "Needs the broker's port published in the Compose file (message-broker: ports \"8100:8000\"); {{broker_url}} defaults to http://localhost:8100. These requests go straight to the Message Broker, because /logs, /metrics and /events are internal routes the Gateway does not expose. \n\nEvents: the broker delivers a subscribed event with POST /events/{topic}. 2xx = handled, 4xx = can never succeed (dead letter channel), 5xx = retried. Run the event requests in order: the first one creates a record, the later ones use it. They need 'Setup' (folder 0) to have run for the Gateway read.",
+      "item": [
+        {
+          "name": "Logs - download the log file (Lab 4, grade 3)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('is a downloadable text file', () => {",
+                  "  pm.expect(pm.response.headers.get('Content-Disposition')).to.include('attachment');",
+                  "  pm.expect(pm.response.headers.get('Content-Disposition')).to.include('.log');",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain');",
+                  "});",
+                  "pm.test('contains log lines', () => pm.expect(pm.response.text()).to.match(/INFO|WARN|ERROR/));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/logs",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "logs"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Logs - last 5 lines (?tail=5)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('plain text, at most 5 lines', () => {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain');",
+                  "  pm.expect(pm.response.text().split('\\n').length).to.be.at.most(5);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/logs?tail=5",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "logs"
+              ],
+              "query": [
+                {
+                  "key": "tail",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Metrics - Prometheus format (Lab 4, grade 9)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('Prometheus text format', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain'));",
+                  "const body = pm.response.text();",
+                  "pm.test('request counter', () => pm.expect(body).to.include('# TYPE http_requests_total counter'));",
+                  "pm.test('utilization gauge for this service', () => pm.expect(body).to.include('service_utilization{service=\"university-record-service\"}'));",
+                  "pm.test('rest_concurrency_limit', () => pm.expect(body).to.include('rest_concurrency_limit'));",
+                  "pm.test('grpc_concurrency_limit', () => pm.expect(body).to.include('grpc_concurrency_limit'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/metrics",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "metrics"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event applicant_initialized - creates a record",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('event_applicant_id', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('handled', () => pm.expect(pm.response.json().status).to.equal('handled'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/applicant_initialized",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "applicant_initialized"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_id\": \"{{event_applicant_id}}\",\n  \"year\": 3,\n  \"courses\": [\"PAD\", \"DB\"]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event applicant_initialized - same event again (idempotent, still 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('handled', () => pm.expect(pm.response.json().status).to.equal('handled'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/applicant_initialized",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "applicant_initialized"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_id\": \"{{event_applicant_id}}\",\n  \"year\": 3,\n  \"courses\": [\"PAD\", \"DB\"]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Read the record the event created (through the Gateway)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK - the record exists', () => pm.response.to.have.status(200));",
+                  "pm.test('only the assigned scopes', () => pm.expect(pm.response.json().assigned_scopes).to.be.an('array').that.is.not.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{event_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{event_applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event credential_initialized - applicant already has a record (idempotent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('handled', () => pm.expect(pm.response.json().status).to.equal('handled'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/credential_initialized",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "credential_initialized"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_id\": \"{{event_applicant_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event decision_made - ban flags the record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('handled', () => pm.expect(pm.response.json().status).to.equal('handled'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/decision_made",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "decision_made"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_id\": \"{{event_applicant_id}}\",\n  \"verdict\": \"ban\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event decision_made - missing verdict (422, would go to the dead letter channel)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('422 with an error code', () => pm.expect(pm.response.json().error.code).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/decision_made",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "decision_made"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_id\": \"{{event_applicant_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event decision_made - unknown applicant (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422', () => pm.response.to.have.status(422));",
+                  "pm.test('422 with an error code', () => pm.expect(pm.response.json().error.code).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/decision_made",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "decision_made"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicant_id\": \"does-not-exist\",\n  \"verdict\": \"ban\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event - topic this service is not subscribed to (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));",
+                  "pm.test('404 with an error code', () => pm.expect(pm.response.json().error.code).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/not_a_topic",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "not_a_topic"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Event - malformed JSON (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('400 with an error code', () => pm.expect(pm.response.json().error.code).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "url": {
+              "raw": "{{broker_url}}/forward/university-record-service/events/decision_made",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "forward",
+                "university-record-service",
+                "events",
+                "decision_made"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ not json",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "auth": {
@@ -1353,6 +1923,14 @@
     },
     {
       "key": "second_instance",
+      "value": ""
+    },
+    {
+      "key": "broker_url",
+      "value": "http://localhost:8100"
+    },
+    {
+      "key": "event_applicant_id",
       "value": ""
     }
   ]
