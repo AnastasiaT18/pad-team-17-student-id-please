@@ -1,799 +1,1065 @@
 {
-  "info": {
-    "_postman_id": "25a21bc7-a172-467f-a25d-a16857443484",
-    "name": "Session Service",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "_exporter_id": "50955450",
-    "_collection_link": "https://go.postman.co/collection/50955450-25a21bc7-a172-467f-a25d-a16857443484?source=collection_link"
-  },
-  "item": [
-    {
-      "name": "Setup (Player Service, through the Gateway)",
-      "item": [
-        {
-          "name": "Register moderator",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// new emails on every run, so the collection can be re-run without wiping the Player database",
-                  "const run = Date.now();",
-                  "pm.collectionVariables.set(\"run_id\", run);",
-                  "pm.collectionVariables.set(\"email\", `moderator${run}@example.com`);",
-                  "pm.collectionVariables.set(\"email_other\", `junior${run}@example.com`);"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"username\": \"moderator\",\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Register junior moderator",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"username\": \"junior\",\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Login moderator",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Response has a token\", () => pm.expect(pm.response.json()).to.have.property(\"token\"));",
-                  "pm.collectionVariables.set(\"token\", pm.response.json().token);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players/login",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players",
-                "login"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Login junior moderator",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Response has a token\", () => pm.expect(pm.response.json()).to.have.property(\"token\"));",
-                  "pm.collectionVariables.set(\"token_other\", pm.response.json().token);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{base_url}}/players/login",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "players",
-                "login"
-              ]
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Create session",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));",
-              "pm.test(\"Response has session_id and status\", () => {",
-              "  const json = pm.response.json();",
-              "  pm.expect(json).to.have.property(\"session_id\");",
-              "  pm.expect(json.status).to.eql(\"created\");",
-              "});",
-              "pm.collectionVariables.set(\"session_id\", pm.response.json().session_id);"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": ""
-        },
-        "url": {
-          "raw": "{{base_url}}/sessions",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Create session - with Idempotency-Key",
-      "event": [
-        {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.collectionVariables.set(\"idempotency_key\", pm.variables.replaceIn(\"{{$guid}}\"));"
-            ]
-          }
-        },
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));",
-              "pm.test(\"Session is created\", () => pm.expect(pm.response.json().status).to.eql(\"created\"));",
-              "pm.collectionVariables.set(\"idempotent_session_id\", pm.response.json().session_id);"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [
-          {
-            "key": "Idempotency-Key",
-            "value": "{{idempotency_key}}"
-          }
-        ],
-        "url": {
-          "raw": "{{base_url}}/sessions",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Create session - no token",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));",
-              "pm.test(\"Returns UNAUTHORIZED\", () => pm.expect(pm.response.json().error.code).to.eql(\"UNAUTHORIZED\"));"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "method": "POST",
-        "header": [],
-        "body": {
-          "mode": "raw",
-          "raw": ""
-        },
-        "url": {
-          "raw": "{{base_url}}/sessions",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get session",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-              "pm.test(\"Response has session_id and roles\", () => {",
-              "  const json = pm.response.json();",
-              "  pm.expect(json.session_id).to.eql(pm.collectionVariables.get(\"session_id\"));",
-              "  pm.expect(json).to.have.property(\"roles\");",
-              "});"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get session - nonexistent",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 404\", () => pm.response.to.have.status(404));",
-              "pm.test(\"Returns SESSION_NOT_FOUND\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_FOUND\"));"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/11111111-1111-4111-8111-111111111111",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "11111111-1111-4111-8111-111111111111"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get session - invalid id format",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 404\", () => pm.response.to.have.status(404));",
-              "pm.test(\"Returns SESSION_NOT_FOUND\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_FOUND\"));"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/not-a-uuid",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "not-a-uuid"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Join session (junior moderator)",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-              "pm.test(\"Junior moderator was added to roles\", () => {",
-              "  const json = pm.response.json();",
-              "  pm.expect(json.roles.junior_moderators).to.be.an(\"array\").that.is.not.empty;",
-              "});"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token_other}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/join",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "join"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Start session",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-              "pm.test(\"Status is active and started_at is set\", () => {",
-              "  const json = pm.response.json();",
-              "  pm.expect(json.status).to.eql(\"active\");",
-              "  pm.expect(json.started_at).to.not.be.null;",
-              "});"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/start",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "start"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Start session - not moderator",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 403\", () => pm.response.to.have.status(403));",
-              "pm.test(\"Returns NOT_MODERATOR\", () => pm.expect(pm.response.json().error.code).to.eql(\"NOT_MODERATOR\"));"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token_other}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/start",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "start"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get current applicant",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-              "pm.test(\"Response has processed_count\", () => {",
-              "  pm.expect(pm.response.json()).to.have.property(\"processed_count\");",
-              "});"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/current-applicant",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "current-applicant"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "End session",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "exec": [
-              "pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
-              "pm.test(\"Response has final_score and results\", () => {",
-              "  const json = pm.response.json();",
-              "  pm.expect(json.status).to.eql(\"ended\");",
-              "  pm.expect(json.results).to.be.an(\"array\");",
-              "});"
-            ],
-            "type": "text/javascript",
-            "packages": {},
-            "requests": {}
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/end",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "end"
-          ]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "End session - not moderator",
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test(\"Status code is 403\", () => pm.response.to.have.status(403));\npm.test(\"Returns NOT_MODERATOR\", () =>\n  pm.expect(pm.response.json().error.code).to.eql(\"NOT_MODERATOR\")\n);"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "auth": {
-          "type": "bearer",
-          "bearer": [
-            {
-              "key": "token",
-              "value": "{{token_other}}",
-              "type": "string"
-            }
-          ]
-        },
-        "method": "POST",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/sessions/{{session_id}}/end",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "sessions",
-            "{{session_id}}",
-            "end"
-          ]
-        }
-      },
-      "response": []
-    }
-  ],
-  "event": [
-    {
-      "listen": "prerequest",
-      "script": {
-        "type": "text/javascript",
-        "packages": {},
-        "requests": {},
-        "exec": [
-          ""
-        ]
-      }
-    },
-    {
-      "listen": "test",
-      "script": {
-        "type": "text/javascript",
-        "packages": {},
-        "requests": {},
-        "exec": [
-          ""
-        ]
-      }
-    }
-  ],
-  "variable": [
-    {
-      "key": "base_url",
-      "value": "http://localhost:8090"
-    },
-    {
-      "key": "run_id",
-      "value": ""
-    },
-    {
-      "key": "email",
-      "value": ""
-    },
-    {
-      "key": "email_other",
-      "value": ""
-    },
-    {
-      "key": "token",
-      "value": ""
-    },
-    {
-      "key": "token_other",
-      "value": ""
-    },
-    {
-      "key": "session_id",
-      "value": ""
-    }
-  ]
+	"info": {
+		"_postman_id": "f7ad6192-47ca-4654-985b-96b88644ddb9",
+		"name": "Session Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "50955450",
+		"_collection_link": "https://go.postman.co/collection/50955450-f7ad6192-47ca-4654-985b-96b88644ddb9?source=collection_link",
+		"description": "Session REST workflow through Gateway → custom Message Broker → Session. Run Setup first, then the session requests in order. The internal operations folder calls the broker directly. Configure base_url (Gateway) and broker_url (broker HTTP API). End-session success means its results were committed to the outbox; Player receives shift_ended asynchronously over gRPC. Native gRPC methods use src/proto/message_broker.proto and src/proto/server-moderation-session.proto; they are not HTTP requests in this collection. The automated regression test covers the decision-concurrency race."
+	},
+	"item": [
+		{
+			"name": "Setup (Player Service, through the Gateway)",
+			"item": [
+				{
+					"name": "Register moderator",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"// new emails on every run, so the collection can be re-run without wiping the Player database",
+									"const run = Date.now();",
+									"pm.collectionVariables.set(\"run_id\", run);",
+									"pm.collectionVariables.set(\"email\", `moderator${run}@example.com`);",
+									"pm.collectionVariables.set(\"email_other\", `junior${run}@example.com`);",
+									"pm.collectionVariables.unset(\"session_id\");",
+									"pm.collectionVariables.unset(\"token\");",
+									"pm.collectionVariables.unset(\"token_other\");"
+								]
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/players",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"players"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"mod{{run_id}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Register junior moderator",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/players",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"players"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"jr{{run_id}}\",\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Login moderator",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+									"pm.test(\"Response has a token\", () => pm.expect(pm.response.json()).to.have.property(\"token\"));",
+									"pm.collectionVariables.set(\"token\", pm.response.json().token);"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/players/login",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"players",
+								"login"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"secret123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Login junior moderator",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+									"pm.test(\"Response has a token\", () => pm.expect(pm.response.json()).to.have.property(\"token\"));",
+									"pm.collectionVariables.set(\"token_other\", pm.response.json().token);"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/players/login",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"players",
+								"login"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"{{email_other}}\",\n  \"password\": \"secret123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"response": []
+				}
+			],
+			"description": "Creates and logs in two test players through the Gateway. Registration generates a new run_id and unique emails for each run."
+		},
+		{
+			"name": "Create session",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 201\", () => pm.response.to.have.status(201));",
+							"pm.test(\"Response has session_id and status\", () => {",
+							"  const json = pm.response.json();",
+							"  pm.expect(json).to.have.property(\"session_id\");",
+							"  pm.expect(json.status).to.eql(\"created\");",
+							"});",
+							"pm.collectionVariables.set(\"session_id\", pm.response.json().session_id);"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "Idempotency-Key",
+						"value": "session-{{run_id}}"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": ""
+				},
+				"url": {
+					"raw": "{{base_url}}/sessions",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions"
+					]
+				},
+				"description": "Uses a fresh key from Setup. Repeating the same moderator/key must return the same session, without creating another one."
+			},
+			"response": []
+		},
+		{
+			"name": "Create session - repeat same Idempotency-Key",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [
+					{
+						"key": "Idempotency-Key",
+						"value": "session-{{run_id}}"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/sessions",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions"
+					]
+				},
+				"description": "Run immediately after Create session. Do not overwrite session_id with the repeated response."
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test(\"Returns 201\", () => pm.response.to.have.status(201));",
+							"pm.test(\"Returns the same session\", () => pm.expect(pm.response.json().session_id).to.eql(pm.collectionVariables.get(\"session_id\")));"
+						]
+					}
+				}
+			]
+		},
+		{
+			"name": "Create session - no token",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 401\", () => pm.response.to.have.status(401));",
+							"pm.test(\"Returns UNAUTHORIZED\", () => pm.expect(pm.response.json().error.code).to.eql(\"UNAUTHORIZED\"));"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": ""
+				},
+				"url": {
+					"raw": "{{base_url}}/sessions",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get session",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+							"pm.test(\"Response has session_id and roles\", () => {",
+							"  const json = pm.response.json();",
+							"  pm.expect(json.session_id).to.eql(pm.collectionVariables.get(\"session_id\"));",
+							"  pm.expect(json).to.have.property(\"roles\");",
+							"});"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get session - nonexistent",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 404\", () => pm.response.to.have.status(404));",
+							"pm.test(\"Returns SESSION_NOT_FOUND\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_FOUND\"));"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/11111111-1111-4111-8111-111111111111",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"11111111-1111-4111-8111-111111111111"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get session - invalid id format",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 404\", () => pm.response.to.have.status(404));",
+							"pm.test(\"Returns SESSION_NOT_FOUND\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_FOUND\"));"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/not-a-uuid",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"not-a-uuid"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Join session (junior moderator)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+							"pm.test(\"Junior moderator was added to roles\", () => {",
+							"  const json = pm.response.json();",
+							"  pm.expect(json.roles.junior_moderators).to.be.an(\"array\").that.is.not.empty;",
+							"});"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token_other}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/join",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"join"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Join session - duplicate junior",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token_other}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/join",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"join"
+					]
+				},
+				"description": "Repeat the successful join before starting the session."
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test(\"Returns 409\", () => pm.response.to.have.status(409));",
+							"pm.test(\"Returns ALREADY_JOINED\", () => pm.expect(pm.response.json().error.code).to.eql(\"ALREADY_JOINED\"));"
+						]
+					}
+				}
+			]
+		},
+		{
+			"name": "Start session",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+							"pm.test(\"Status is active and started_at is set\", () => {",
+							"  const json = pm.response.json();",
+							"  pm.expect(json.status).to.eql(\"active\");",
+							"  pm.expect(json.started_at).to.not.be.null;",
+							"});"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/start",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"start"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Start session - not moderator",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 403\", () => pm.response.to.have.status(403));",
+							"pm.test(\"Returns NOT_MODERATOR\", () => pm.expect(pm.response.json().error.code).to.eql(\"NOT_MODERATOR\"));"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token_other}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/start",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"start"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get current applicant",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Status code is 200\", () => pm.response.to.have.status(200));",
+							"pm.test(\"Response has processed_count\", () => {",
+							"  pm.expect(pm.response.json()).to.have.property(\"processed_count\");",
+							"});"
+						],
+						"type": "text/javascript",
+						"packages": {},
+						"requests": {}
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/current-applicant",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"current-applicant"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "End session",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test(\"Returns 200\", () => pm.response.to.have.status(200));",
+							"pm.test(\"Returns ended session and final results\", () => {",
+							"  const body = pm.response.json();",
+							"  pm.expect(body.session_id).to.eql(pm.collectionVariables.get(\"session_id\"));",
+							"  pm.expect(body.status).to.eql(\"ended\");",
+							"  pm.expect(body.final_score).to.be.a(\"number\");",
+							"  pm.expect(body.results).to.be.an(\"array\").that.is.not.empty;",
+							"  body.results.forEach(result => {",
+							"    pm.expect(result.player_id).to.be.a(\"string\");",
+							"    pm.expect(result.xp_gained).to.be.a(\"number\").and.at.least(0);",
+							"    pm.expect(result.shift_completed).to.be.a(\"boolean\");",
+							"    pm.expect(result.disciplinary_action).to.be.a(\"boolean\");",
+							"  });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/end",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"end"
+					]
+				},
+				"description": "200 means Session and its immutable shift_ended event were saved together. The outbox worker publishes to the custom broker; Player applies results asynchronously. Do not assert immediate XP changes here."
+			},
+			"response": []
+		},
+		{
+			"name": "End session - already ended",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/end",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"end"
+					]
+				},
+				"description": "Repeated end requests do not queue another shift event. The existing outbox worker owns retries."
+			},
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test(\"Returns 409\", () => pm.response.to.have.status(409));",
+							"pm.test(\"Returns SESSION_NOT_ACTIVE\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_ACTIVE\"));"
+						]
+					}
+				}
+			]
+		},
+		{
+			"name": "End session - not moderator",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test(\"Status code is 403\", () => pm.response.to.have.status(403));\npm.test(\"Returns NOT_MODERATOR\", () =>\n  pm.expect(pm.response.json().error.code).to.eql(\"NOT_MODERATOR\")\n);"
+						]
+					}
+				}
+			],
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token_other}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/sessions/{{session_id}}/end",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"sessions",
+						"{{session_id}}",
+						"end"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Lab 4 - internal operations through the broker",
+			"description": "Operator requests, not public user routes. Requires the current Session image registered and healthy in Discovery, and the broker HTTP port published. The broker chooses one healthy replica. Logs contain that replica’s active file only; metrics counters are local to that replica, while outbox gauges describe the shared Session database. For consistent per-replica scraping use Prometheus directly in the Docker network.",
+			"item": [
+				{
+					"name": "Download Session logs",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{broker_url}}/forward/server-moderation-session-service/logs",
+							"host": [
+								"{{broker_url}}"
+							],
+							"path": [
+								"forward",
+								"server-moderation-session-service",
+								"logs"
+							]
+						},
+						"description": "Use Postman’s response download/save option to save the attachment. Missing file: 404 LOG_NOT_FOUND; unreadable file: 503 LOG_UNAVAILABLE. Do not publish operational logs in Git."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Returns 200\", () => pm.response.to.have.status(200));",
+									"pm.test(\"Returns a text attachment\", () => {",
+									"  pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/plain\");",
+									"  pm.expect(pm.response.headers.get(\"Content-Disposition\")).to.include(\"attachment\");",
+									"  pm.expect(pm.response.headers.get(\"Cache-Control\")).to.include(\"no-store\");",
+									"});",
+									"pm.test(\"First entry is structured JSON when the file is non-empty\", () => {",
+									"  const first = pm.response.text().trim().split(\"\\n\")[0];",
+									"  if (first) {",
+									"    const entry = JSON.parse(first);",
+									"    pm.expect(entry.service).to.eql(\"server-moderation-session-service\");",
+									"    pm.expect(entry.timestamp).to.be.a(\"string\");",
+									"    pm.expect(entry.level).to.be.a(\"string\");",
+									"  }",
+									"});"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Session Prometheus metrics",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{broker_url}}/forward/server-moderation-session-service/metrics",
+							"host": [
+								"{{broker_url}}"
+							],
+							"path": [
+								"forward",
+								"server-moderation-session-service",
+								"metrics"
+							]
+						},
+						"description": "Backlog gauges appear after the first successful database collection. Inspect collection_success and snapshot_timestamp_seconds when checking freshness."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Returns 200\", () => pm.response.to.have.status(200));",
+									"pm.test(\"Exposes HTTP, gRPC and outbox metric families\", () => {",
+									"  const text = pm.response.text();",
+									"  pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/plain\");",
+									"  pm.expect(text).to.include(\"# TYPE http_requests_in_flight gauge\");",
+									"  pm.expect(text).to.include(\"# TYPE grpc_server_in_flight gauge\");",
+									"  pm.expect(text).to.include(\"# TYPE session_outbox_publications_total counter\");",
+									"  pm.expect(text).to.include(\"# TYPE session_outbox_collection_success gauge\");",
+									"});"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Gateway blocks internal /logs",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/logs",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"logs"
+							]
+						},
+						"description": "Authenticated player requests must not gain access to operational endpoints."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Gateway does not expose this internal route\", () => pm.response.to.have.status(404));"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Gateway blocks internal /metrics",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{token}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/metrics",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"metrics"
+							]
+						},
+						"description": "Authenticated player requests must not gain access to operational endpoints."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Gateway does not expose this internal route\", () => pm.response.to.have.status(404));"
+								]
+							}
+						}
+					]
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8090"
+		},
+		{
+			"key": "run_id",
+			"value": ""
+		},
+		{
+			"key": "email",
+			"value": ""
+		},
+		{
+			"key": "email_other",
+			"value": ""
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "secret"
+		},
+		{
+			"key": "token_other",
+			"value": "",
+			"type": "secret"
+		},
+		{
+			"key": "session_id",
+			"value": ""
+		},
+		{
+			"key": "broker_url",
+			"value": "http://localhost:8100",
+			"description": "Broker HTTP URL for internal operator checks; not its gRPC port."
+		}
+	]
 }
