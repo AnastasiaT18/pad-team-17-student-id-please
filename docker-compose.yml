@@ -218,7 +218,7 @@ services:
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.4.0}
+    image: janetag/player-service:${PLAYER_VERSION:-0.4.1}
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -243,7 +243,7 @@ services:
         condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.4.0}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.4.1}
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
