@@ -82,6 +82,16 @@
       "key": "discord_proxy_url",
       "value": "http://localhost:8086",
       "description": ""
+    },
+    {
+      "key": "prometheus_url",
+      "value": "http://localhost:9091",
+      "description": "CPR Prometheus API, exposed on localhost for read-only metrics queries."
+    },
+    {
+      "key": "discord_dms_broadcast_baseline",
+      "value": "",
+      "description": "Saved by the DMs Lab 4 baseline request; do not commit real credentials."
     }
   ],
   "item": [
@@ -687,6 +697,242 @@
               "type": "noauth"
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "Lab 4 - Discord DMs monitoring",
+      "description": "Read-only Prometheus API checks for Discord DMs ONLY. Run against the CPR stack after publishing the updated DMs Docker image and adding its Prometheus job. The default expected_replicas is 2. Request 05 captures a broadcast counter baseline. Then send a fresh authorized message to a disposable, existing DMs channel through the normal client flow; wait two Prometheus scrape cycles and run request 06. An increase proves monitoring observed a broadcast on some DMs replica, not remote receipt. The two-replica delivery and failover checks remain in the DMs repository test script.",
+      "item": [
+        {
+          "name": "01. Discord DMs replica targets UP",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=up%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "Each DMs replica must be independently scraped and report UP=1."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Every Discord DMs target is UP', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.eql(1));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02. Discord DMs Redis adapter ready",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=discord_dms_redis_adapter_ready%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "Both Redis Socket.IO Pub/Sub clients must be ready on each DMs replica."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Redis adapter ready on each Discord DMs replica', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.eql(1));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03. Discord DMs active Socket.IO connections",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=discord_dms_socket_connections%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "Reads per-replica active authenticated socket connection gauges."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Active Socket.IO connections is non-negative on every replica', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.be.at.least(0));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04. Discord DMs task capacity",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=discord_dms_task_capacity%7Bjob%3D%22discord-dms-service%22%7D",
+            "description": "CPR sets MAX_CONCURRENT_TASKS=20 for Discord DMs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "pm.test('Discord DMs replicas have distinct targets', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  const instances = rows.map(row => row.metric.instance);",
+                  "  pm.expect(new Set(instances).size).to.eql(instances.length);",
+                  "});",
+                  "pm.test('Each Discord DMs replica has capacity 20', () => {",
+                  "  pm.expect(rows.length).to.be.at.least(expected);",
+                  "  rows.forEach(row => pm.expect(Number(row.value[1])).to.eql(20));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05. Capture Discord DMs broadcast baseline",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_messages_broadcast_total%7Bjob%3D%22discord-dms-service%22%7D%29",
+            "description": "Run before sending a new, authorized test message to an existing disposable DMs channel."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "pm.test('A Discord DMs broadcast counter is available', () => {",
+                  "  pm.expect(rows.length).to.eql(1);",
+                  "  pm.expect(Number(rows[0].value[1])).to.be.at.least(0);",
+                  "});",
+                  "if (rows.length === 1) {",
+                  "  pm.collectionVariables.set('discord_dms_broadcast_baseline', String(rows[0].value[1]));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06. Verify Discord DMs broadcast activity increased",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28discord_dms_messages_broadcast_total%7Bjob%3D%22discord-dms-service%22%7D%29",
+            "description": "Run after request 05 and a new authorized DMs message, allowing for Prometheus scraping. A counter increase is not remote-consumer acknowledgement."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Prometheus query succeeded', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "  pm.expect(body.data.resultType).to.eql('vector');",
+                  "});",
+                  "const rows = body.data && body.data.result ? body.data.result : [];",
+                  "const baselineText = pm.collectionVariables.get('discord_dms_broadcast_baseline');",
+                  "pm.test('Discord DMs broadcast baseline was captured', () => {",
+                  "  pm.expect(baselineText).to.not.be.oneOf([undefined, null, '']);",
+                  "});",
+                  "pm.test('Discord DMs broadcasts increased after the new message', () => {",
+                  "  pm.expect(rows.length).to.eql(1);",
+                  "  pm.expect(baselineText).to.not.be.oneOf([undefined, null, '']);",
+                  "  pm.expect(Number(rows[0].value[1])).to.be.above(Number(baselineText));",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     }
