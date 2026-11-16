@@ -153,6 +153,8 @@ services:
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
       BROKER_URL: http://message-broker:8000
+      CACHE_REDIS_URL: redis://application-cache:6379/0
+      AUTH_CACHE_TTL_SECONDS: ${AUTH_CACHE_TTL_SECONDS:-60}
     depends_on:
       message-broker:
         condition: service_healthy
@@ -319,6 +321,8 @@ services:
       SERVICE_HTTP_PORT: 8080
       SERVICE_GRPC_PORT: 9090
       SERVICE_HEARTBEAT_SECONDS: 15
+      CACHE_REDIS_URL: redis://application-cache:6379/0
+      RULES_CACHE_TTL_SECONDS: ${RULES_CACHE_TTL_SECONDS:-60}
     deploy:
       replicas: 2
     depends_on:
@@ -432,6 +436,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # Lab 5 application cache. Independent of Discord's Socket.IO Redis below.
+  # Optional at application startup: clients must fall back when it is unavailable.
+  application-cache:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${CACHE_MAXMEMORY:-128mb}
+      - --maxmemory-policy
+      - noeviction
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No host port or persistent volume: cached data is disposable.
 
   redis:
     image: redis:7-alpine

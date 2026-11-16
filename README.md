@@ -163,6 +163,13 @@ line with its `container`.
 
 ---
 
+## Application cache (Lab 5, Grade 6)
+
+Compose provisions `application-cache`, a dedicated internal Redis instance for Rules and
+Gateway authentication caching. See [setup, architecture and verification](docs/lab5-cache.md).
+This infrastructure alone does not enable caching: the cache clients, metrics and tests will
+arrive in separate Server Rules and Gateway changes, followed by image releases.
+
 ## Service Boundaries
 
 ### Player Service
