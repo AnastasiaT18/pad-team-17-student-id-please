@@ -13,6 +13,12 @@ rule_files:
   - /etc/prometheus/alerts.yml
 
 scrape_configs:
+  # Lab 5 authentication cache metrics; requires the cache-enabled Gateway image.
+  - job_name: gateway-service
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway-service:8000"]
+
   # Requests, routing between instances, circuit breakers, queues, events, gRPC vs REST.
   - job_name: message-broker
     static_configs:
