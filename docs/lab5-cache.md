@@ -82,6 +82,40 @@ Expect `+PONG`. This command requires a running Gateway container.
 
 ## Acceptance checks after the service changes
 
+### Prometheus cache monitoring
+
+Prometheus scrapes `gateway-service:8000/metrics` using the `gateway-service` job.
+The existing `server-rules-service` job collects rules-cache counters from both replicas.
+Deploy cache-enabled images before expecting these metrics; the older Gateway image
+returns 404 for `/metrics` and its Prometheus target will be DOWN until upgraded.
+This monitoring change does not select or publish new application images.
+
+After updating the configuration, run from this repository:
+
+```bash
+docker compose restart prometheus
+```
+
+Open `http://localhost:9091/targets` and check that `gateway-service` and both Rules
+targets are UP. Then compare these queries before and after repeated authenticated
+requests (allow at least one 5-second scrape interval):
+
+```promql
+sum(gateway_auth_cache_lookups_total{service="gateway",result="hit"})
+sum(gateway_jwt_verifications_total{service="gateway"})
+sum(rules_cache_lookups_total{service="server-rules-service",result="hit"})
+sum(rules_database_loads_total{service="server-rules-service"})
+sum(rules_version_checks_total{service="server-rules-service"})
+```
+
+A repeated valid token should add a Gateway cache hit without another full signature
+verification. Repeated rules reads should add cache hits without additional full-rule
+loads; each rules read still makes a lightweight database version check. The existing
+Grafana Prometheus data source can query these counters in Explore; no new dashboard
+panels are provisioned by this change.
+
+### Application acceptance checks
+
 These are pending; this branch does not claim they pass:
 
 1. Run authenticated `GET /rules` twice through `http://localhost:8090` in Postman.

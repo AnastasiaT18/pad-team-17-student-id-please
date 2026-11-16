@@ -112,6 +112,8 @@ Grade 10. `docker compose up -d` also starts the monitoring; nothing else is nee
   collects the metrics every 5 s: `GET /metrics` of the Message Broker and of Service Discovery,
   `GET /actuator/prometheus` of **every replica** of Applicant and Credential, and `GET /metrics` of
   every replica of University Record, Server Rules, Player (port `3000`), and Session (port `3001`).
+  It also scrapes Gateway's `/metrics` on internal port `8000` for Lab 5 authentication-cache
+  counters; this target requires the cache-enabled Gateway image.
   A replicated service is found through Docker's
   DNS - its name resolves to all its replicas - so each replica is collected on its own and shows up as
   its own `instance`. The data is kept for 7 days in `prometheus-data`.
