@@ -31,3 +31,6 @@
 [submodule "services/message-broker"]
 	path = services/message-broker
 	url = https://github.com/AnastasiaT18/pad-team-17-message-broker
+[submodule "services/analytics"]
+	path = services/analytics
+	url = https://github.com/DannaCojocari/pad-team-17-analytics.git

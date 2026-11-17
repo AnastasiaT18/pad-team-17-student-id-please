@@ -165,6 +165,20 @@ line with its `container`.
 
 ---
 
+## Data warehouse and ETL (Lab 5, Grade 4)
+
+CPR includes an analytics warehouse, versioned migration job and scheduled Python
+ETL reading selected data from all eight operational databases. Moderation and
+Discord use incremental loading; the other six sources use full snapshots.
+
+See [analytics setup, architecture and verification](docs/lab5-analytics.md).
+Analytics source is tracked separately in `services/analytics`, pinned to the
+released commit; Compose continues to run the published image.
+
+Provision the dedicated reader accounts and configure the analytics environment
+variables before starting the scheduler. The initial Docker Hub release must be
+published before the new image can be pulled. No private-source checkout is needed.
+
 ## Application cache (Lab 5, Grade 6)
 
 Compose provisions `application-cache`, a dedicated internal Redis instance for Rules and
