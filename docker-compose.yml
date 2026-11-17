@@ -14,7 +14,91 @@
 
 name: pad-team-17
 
+# Analytics runs from a published image; no private source checkout is needed.
+x-analytics-environment: &analytics-environment
+  WAREHOUSE_DSN: ${ANALYTICS_WAREHOUSE_DSN:?Set ANALYTICS_WAREHOUSE_DSN}
+  MODERATION_DSN: ${ANALYTICS_MODERATION_DSN:?Set ANALYTICS_MODERATION_DSN}
+  DISCORD_DSN: ${ANALYTICS_DISCORD_DSN:?Set ANALYTICS_DISCORD_DSN}
+  PLAYER_DSN: ${ANALYTICS_PLAYER_DSN:?Set ANALYTICS_PLAYER_DSN}
+  SESSION_DSN: ${ANALYTICS_SESSION_DSN:?Set ANALYTICS_SESSION_DSN}
+  APPLICANT_DSN: ${ANALYTICS_APPLICANT_DSN:?Set ANALYTICS_APPLICANT_DSN}
+  CREDENTIAL_DSN: ${ANALYTICS_CREDENTIAL_DSN:?Set ANALYTICS_CREDENTIAL_DSN}
+  RULES_DSN: ${ANALYTICS_RULES_DSN:?Set ANALYTICS_RULES_DSN}
+  RECORD_DSN: ${ANALYTICS_RECORD_DSN:?Set ANALYTICS_RECORD_DSN}
+  MODERATION_TIMEZONE: ${ANALYTICS_MODERATION_TIMEZONE:-UTC}
+  DISCORD_TIMEZONE: ${ANALYTICS_DISCORD_TIMEZONE:-UTC}
+  PLAYER_TIMEZONE: ${ANALYTICS_PLAYER_TIMEZONE:-UTC}
+  SESSION_TIMEZONE: ${ANALYTICS_SESSION_TIMEZONE:-UTC}
+  APPLICANT_TIMEZONE: ${ANALYTICS_APPLICANT_TIMEZONE:-UTC}
+  CREDENTIAL_TIMEZONE: ${ANALYTICS_CREDENTIAL_TIMEZONE:-UTC}
+  RULES_TIMEZONE: ${ANALYTICS_RULES_TIMEZONE:-UTC}
+  RECORD_TIMEZONE: ${ANALYTICS_RECORD_TIMEZONE:-UTC}
+  ETL_INTERVAL_SECONDS: ${ETL_INTERVAL_SECONDS:-300}
+  ETL_RECONCILE_SECONDS: ${ETL_RECONCILE_SECONDS:-86400}
+  ETL_OVERLAP_SECONDS: ${ETL_OVERLAP_SECONDS:-600}
+
+x-analytics-dependencies: &analytics-dependencies
+  analytics-migrate:
+    condition: service_completed_successfully
+  moderation-db:
+    condition: service_healthy
+  discord-dms-db:
+    condition: service_healthy
+  player-db:
+    condition: service_healthy
+  server-moderation-session-db:
+    condition: service_healthy
+  applicant-db:
+    condition: service_healthy
+  credential-db:
+    condition: service_healthy
+  server-rules-db:
+    condition: service_healthy
+  university-record-db:
+    condition: service_healthy
+
 services:
+  # ---------------------------------------------------------------- analytics (Lab 5, Grade 4)
+  analytics-warehouse:
+    container_name: pad17-analytics-warehouse
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: analytics
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: ${ANALYTICS_WAREHOUSE_PASSWORD:?Set ANALYTICS_WAREHOUSE_PASSWORD}
+    volumes:
+      - analytics-warehouse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U analytics -d analytics']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  analytics-migrate:
+    container_name: pad17-analytics-migrate
+    image: ${ANALYTICS_IMAGE:-dannacojocari/pad-team-17-analytics:v0.1.0}
+    command: [--migrate]
+    environment:
+      WAREHOUSE_DSN: ${ANALYTICS_WAREHOUSE_DSN:?Set ANALYTICS_WAREHOUSE_DSN}
+    depends_on:
+      analytics-warehouse:
+        condition: service_healthy
+
+  analytics-scheduler:
+    container_name: pad17-analytics-scheduler
+    image: ${ANALYTICS_IMAGE:-dannacojocari/pad-team-17-analytics:v0.1.0}
+    entrypoint: [python, -m, etl.schedule]
+    environment: *analytics-environment
+    depends_on: *analytics-dependencies
+    restart: unless-stopped
+
+  analytics-etl:
+    container_name: pad17-analytics-etl
+    image: ${ANALYTICS_IMAGE:-dannacojocari/pad-team-17-analytics:v0.1.0}
+    profiles: [tools]
+    environment: *analytics-environment
+    depends_on: *analytics-dependencies
+
   # ---------------------------------------------------------------- infrastructure
 
   player-db:
@@ -544,6 +628,7 @@ services:
       - loki
 
 volumes:
+  analytics-warehouse-data:
   message-broker-data:
   player-db-data:
   server-moderation-session-db-data:
