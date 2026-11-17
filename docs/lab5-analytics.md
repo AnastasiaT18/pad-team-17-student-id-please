@@ -3,16 +3,28 @@
 ## Deployment and release status
 
 Analytics is implemented in [pad-team-17-analytics](https://github.com/DannaCojocari/pad-team-17-analytics).
-CPR deploys `dannacojocari/pad-team-17-analytics` as a published image, without
-building or cloning private source. `ANALYTICS_IMAGE` selects the release; the
-initial planned version is `v0.1.0`. Publish it before trying to pull it. A verified
-image digest is preferred for a fixed final demonstration. Source revision and
-repository URL are recorded as OCI image labels by the publishing workflow.
+CPR deploys `dannacojocari/pad-team-17-analytics` as a published image; it does not
+build from the source submodule. `ANALYTICS_IMAGE` selects the image release.
+The analytics Git release `v0.1.0` is on main at commit
+`8251a5c408eb01c8f99be47b2cb21fb4a8c52457`.
 
-This integration is prepared for the initial image release. A local-image test
-can verify Compose behavior but does not prove Docker Hub publication, Actions
-secrets or that both architecture manifests exist. Complete the pull-based release
-check below after the image is published.
+Track that source revision in `services/analytics`, following the existing CPR
+submodule convention. Teammates who need source access can initialize it with:
+
+```sh
+git submodule update --init services/analytics
+```
+
+The recorded gitlink pins the reviewed source; the Docker image supplies runtime
+code. Updating one does not update the other. Keep both aligned for each release.
+The existing publishing convention can republish a Docker version tag on later
+main pushes, so inspect the OCI revision label and use a verified digest when an
+exact artifact must remain pinned. Do not move the Git release tag.
+
+The Git release has been verified. Docker Hub publication and the final pull-based
+acceptance check remain separate: a Git tag or local-image test does not prove
+registry publication or both platform manifests. Source revision and repository
+URL are included as OCI labels by the publishing workflow.
 
 ## Architecture
 
