@@ -104,6 +104,14 @@ and [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team
 Their existing API checks remain useful; dedicated Lab 3 failover and cross-replica tests are
 tracked separately and are not yet presented as passing.
 
+### Private database replication (Lab 5, Grade 5)
+
+The optional [replication overlay](docker-compose.replication.yml) adds two PostgreSQL
+standbys each for Server Rules and University Record, with asynchronous streaming and
+scripted manual failover. The original primary volumes are retained. Read the
+[preparation, backup, enablement and verification procedure](docs/lab5-private-db-replication.md)
+before enabling it; do not replace an existing database with an empty one.
+
 ### Monitoring: Prometheus, Loki and Grafana (Lab 4)
 
 Grade 10. `docker compose up -d` also starts the monitoring; nothing else is needed.
