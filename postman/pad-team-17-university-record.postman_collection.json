@@ -2,7 +2,7 @@
   "info": {
     "name": "University Record Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "University Record Service, tested through the Gateway ([http://localhost:8090](http://localhost:8090)). Its own ports are not published: client requests go Gateway -> Message Broker -> service. Folder 5 talks to the Message Broker directly (http://localhost:8100) for the routes the Gateway does not expose.\n\nSELF-CONTAINED: folder 0 registers three throwaway players (moderator, junior, stranger), logs them in, opens a real session, lets the junior join and starts it. Starting the session makes Session Service call AssignScopes on University Record over gRPC, so no grpcurl or manual step is needed. Run the collection top to bottom with the Collection Runner (each run registers fresh players).\n\nWHAT IT PROVES\n\n- Folder 1: POST /records checks the session with Session Service (gRPC): 201 for a running session, 404 unknown, 409 not started, 422/400/401 for bad input.\n    \n- Folder 2: GET /sessions/{id}/records/{applicantId} returns only the caller's assigned scopes (200), 403 for a player that is not in the session, 404 unknown applicant, 401 without a token.\n    \n- Folder 3 (Lab 3, grades 4-5): two replicas behind the Gateway; round-robin alternates the replicas; a record written through one replica is readable through the other (the service is instance-agnostic).\n    \n- Folder 4 (Lab 3, grades 6 and 9): circuit breaker, manual, see its description.\n    \n\n- Folder 5 (Lab 4): logs download (grade 3), Prometheus metrics, and the topic events the broker delivers to POST /events/{topic} (grade 5). Needs the new image (RabbitMQ removed).\n\nNOTE: POST /records publishes record_initialized using broker.MessageBroker/Publish over gRPC at message-broker:9090. Use a broker image built from feat/broker-grpc-events and updated Applicant/Credential registrations subscribing to record_initialized. Missing subscribers still cause 503 UPSTREAM_UNAVAILABLE; gRPC does not fix missing subscriptions.\n\nREQUIRES the service to answer with an X-Instance-Id header (the container id). Folder 3 fails without it.\n\nNOT COVERED HERE\n\n- GET /health: it is polled by Service Discovery inside the Compose network and is not routed by the Gateway. Check it with: docker compose logs discovery-service\n    \n- gRPC (AssignScopes, GetRecordSnapshot): exercised indirectly by starting the session.\n\nFolder 5 event requests exercise the REST compatibility endpoint through the broker HTTP forwarding route. They do not prove gRPC EventSubscriber/Deliver. Import src/main/proto/message_broker.proto into a Postman gRPC request and call broker.EventSubscriber/Deliver on a locally exposed University Record gRPC port to verify delivery; see README. This service-local copy preserves the shared collection requests and tests."
+    "description": "University Record Service, tested through the Gateway ([http://localhost:8090](http://localhost:8090)). Its own ports are not published: client requests go Gateway -> Message Broker -> service. Folder 5 talks to the Message Broker directly (http://localhost:8100) for the routes the Gateway does not expose.\n\nSELF-CONTAINED: folder 0 registers three throwaway players (moderator, junior, stranger), logs them in, opens a real session, lets the junior join and starts it. Starting the session makes Session Service call AssignScopes on University Record over gRPC, so no grpcurl or manual step is needed. Run the collection top to bottom with the Collection Runner (each run registers fresh players).\n\nWHAT IT PROVES\n\n- Folder 1: POST /records checks the session with Session Service (gRPC): 201 for a running session, 404 unknown, 409 not started, 422/400/401 for bad input.\n    \n- Folder 2: GET /sessions/{id}/records/{applicantId} returns only the caller's assigned scopes (200), 403 for a player that is not in the session, 404 unknown applicant, 401 without a token.\n    \n- Folder 3 (Lab 3, grades 4-5): repeated routed reads identify the serving application; completed record writes remain readable without assuming replica order.\n    \n- Folder 4 (Lab 3, grades 6 and 9): circuit breaker, manual, see its description.\n    \n\n- Folder 5 (Lab 4): logs download (grade 3), Prometheus metrics, and the topic events the broker delivers to POST /events/{topic} (grade 5). Needs the new image (RabbitMQ removed).\n\nNOTE: POST /records publishes record_initialized using broker.MessageBroker/Publish over gRPC at message-broker:9090. Use a broker image built from feat/broker-grpc-events and updated Applicant/Credential registrations subscribing to record_initialized. Missing subscribers still cause 503 UPSTREAM_UNAVAILABLE; gRPC does not fix missing subscriptions.\n\nREQUIRES the service to answer with an X-Instance-Id header (the container id). Folder 3 fails without it.\n\nNOT COVERED HERE\n\n- GET /health: it is polled by Service Discovery inside the Compose network and is not routed by the Gateway. Check it with: docker compose logs discovery-service\n    \n- gRPC (AssignScopes, GetRecordSnapshot): exercised indirectly by starting the session.\n\nFolder 5 event requests exercise the REST compatibility endpoint through the broker HTTP forwarding route. They do not prove gRPC EventSubscriber/Deliver. Import src/main/proto/message_broker.proto into a Postman gRPC request and call broker.EventSubscriber/Deliver on a locally exposed University Record gRPC port to verify delivery; see README. This service-local copy preserves the shared collection requests and tests.\n\nLAB 5: manual database-failover requests are at the end. Run their capture request before the terminal promotion and the remaining requests after recovery. Running the collection without a promotion only proves API availability; it does not prove database failover. Existing authentication, validation and scope checks are preserved. Use a development stack: Rules replacements change the active rule set and IDs; record creation publishes real events."
   },
   "item": [
     {
@@ -967,10 +967,10 @@
     },
     {
       "name": "3. Lab 3 - two replicas behind the Gateway",
-      "description": "Run these requests back to back and alone (no other traffic in between), so the round-robin order is predictable. In Lab 4 the round-robin is done by the Message Broker (Gateway -> broker -> service).",
+      "description": "The broker selects a healthy, least-loaded application instance; repeated requests need not alternate. Response instance IDs identify application containers, not database primaries. These requests check successful responses and shared data, not strict round-robin scheduling.",
       "item": [
         {
-          "name": "Round-robin - first request",
+          "name": "Routing - successful read 1",
           "event": [
             {
               "listen": "test",
@@ -978,11 +978,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('names the replica that answered (X-Instance-Id)', () => {",
-                  "  const i = pm.response.headers.get('X-Instance-Id');",
-                  "  pm.expect(i, 'X-Instance-Id missing: the service must send it, see the README of this collection').to.be.a('string').and.not.be.empty;",
-                  "  pm.collectionVariables.set('first_instance', i);",
-                  "});"
+                  "pm.test('serving application identifies itself', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.be.a('string').and.not.be.empty);"
                 ]
               }
             }
@@ -1016,7 +1012,7 @@
           "response": []
         },
         {
-          "name": "Round-robin - next request goes to the other replica",
+          "name": "Routing - successful read 2",
           "event": [
             {
               "listen": "test",
@@ -1024,12 +1020,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('answered by the OTHER replica', () => {",
-                  "  const i = pm.response.headers.get('X-Instance-Id');",
-                  "  pm.expect(i).to.be.a('string').and.not.be.empty;",
-                  "  pm.expect(i).to.not.eql(pm.collectionVariables.get('first_instance'));",
-                  "  pm.collectionVariables.set('second_instance', i);",
-                  "});"
+                  "pm.test('serving application identifies itself', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.be.a('string').and.not.be.empty);"
                 ]
               }
             }
@@ -1063,7 +1054,7 @@
           "response": []
         },
         {
-          "name": "Round-robin - third request wraps back to the first replica",
+          "name": "Routing - successful read 3",
           "event": [
             {
               "listen": "test",
@@ -1071,9 +1062,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "pm.test('back to the first replica (round-robin wraps around)', () => {",
-                  "  pm.expect(pm.response.headers.get('X-Instance-Id')).to.eql(pm.collectionVariables.get('first_instance'));",
-                  "});"
+                  "pm.test('serving application identifies itself', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.be.a('string').and.not.be.empty);"
                 ]
               }
             }
@@ -1153,15 +1142,16 @@
           "response": []
         },
         {
-          "name": "Instance-agnostic - read it through the other replica",
+          "name": "Shared data - read the completed write",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('200 OK: the other replica sees the record', () => pm.response.to.have.status(200));",
-                  "pm.test('answered by a different replica', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.not.eql(pm.collectionVariables.get('first_instance')));"
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('serving application identifies itself', () => pm.expect(pm.response.headers.get('X-Instance-Id')).to.be.a('string').and.not.be.empty);",
+                  "pm.test('scoped record is readable', () => pm.expect(pm.response.json().assigned_scopes).to.be.an('array'));"
                 ]
               }
             }
@@ -1851,6 +1841,182 @@
                   "language": "json"
                 }
               }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Lab 5 Grade 5 - database failover (MANUAL)",
+      "description": "Run setup, Create Record and Get Record first, keeping the real session active. Send the capture request. In a terminal check `bash infrastructure/replication/cluster.sh record status`, confirm the record AND scope assignments reached both standbys, then use `bash infrastructure/replication/cluster.sh record failover university-record-db` ONLY if that is the current primary. Wait for recovery, then send the remaining requests. The new POST uses the real Session and Broker and publishes an event; they must be healthy. Rerun the existing 401/403 scope tests after promotion. Fencing, DB role checks and rebuilding remain terminal operations. A collection run without an actual promotion is only an API smoke check.",
+      "item": [
+        {
+          "name": "Failover - capture the assigned record before promotion",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('lab5_failover_record', JSON.stringify(pm.response.json()));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Failover - read the same scoped record after promotion",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('record data and assigned scopes survive promotion', () => pm.expect(pm.response.json()).to.deep.eql(JSON.parse(pm.collectionVariables.get('lab5_failover_record'))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{applicant_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Failover - create a new record after promotion",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('new applicant ID is returned', () => pm.expect(pm.response.json().applicant_id).to.be.a('string').and.not.be.empty);",
+                  "pm.collectionVariables.set('written_applicant_id', pm.response.json().applicant_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/records",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Failover - read the newly created record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('same player still has the expected scopes', () => pm.expect(pm.response.json().assigned_scopes).to.deep.eql(JSON.parse(pm.collectionVariables.get('lab5_failover_record')).assigned_scopes));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/records/{{written_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "sessions",
+                "{{session_id}}",
+                "records",
+                "{{written_applicant_id}}"
+              ]
             }
           },
           "response": []
