@@ -1,6 +1,120 @@
-# Opt-in overlay. Keep docker-compose.yml alone for the original deployment.
-# Use scripts/database-replication.sh to initialize routing state before starting.
+# Explicit Grade 5 overlay. Reuses existing PG18 primary volumes; no private source/build needed.
+x-ha: &ha
+  image: postgres:18
+  entrypoint: ["sh", "/opt/pad17-ha/start.sh"]
+  command: ["-c", "wal_level=replica", "-c", "max_wal_senders=10",
+            "-c", "hot_standby=on", "-c", "wal_keep_size=64MB",
+            "-c", "synchronous_standby_names=", "-c", "synchronous_commit=on"]
+  restart: "no"
+  healthcheck:
+    test: ["CMD", "sh", "/opt/pad17-ha/health.sh"]
+    interval: 3s
+    timeout: 3s
+    retries: 30
+    start_period: 10s
+
+x-rules-env: &rules-env
+  POSTGRES_DB: rules_db
+  POSTGRES_USER: ${SERVER_RULES_DB_USER}
+  POSTGRES_PASSWORD: ${SERVER_RULES_DB_PASSWORD}
+  REPLICATION_PASSWORD: ${SERVER_RULES_REPLICATION_PASSWORD:?Set SERVER_RULES_REPLICATION_PASSWORD}
+  PGDATA: /var/lib/postgresql/18/docker
+
+x-record-env: &record-env
+  POSTGRES_DB: record_db
+  POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
+  POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+  REPLICATION_PASSWORD: ${UNIVERSITY_RECORD_REPLICATION_PASSWORD:?Set UNIVERSITY_RECORD_REPLICATION_PASSWORD}
+  PGDATA: /var/lib/postgresql/18/docker
+
 services:
+  server-rules-db:
+    <<: *ha
+    environment:
+      <<: *rules-env
+      NODE_MODE: primary
+      NODE_NAME: server-rules-db
+    volumes:
+      - server-rules-db-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+      - ./infrastructure/replication/postgres/init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+
+  server-rules-db-standby-1:
+    <<: *ha
+    environment:
+      <<: *rules-env
+      NODE_MODE: standby
+      NODE_NAME: server-rules-db-standby-1
+      REPLICATION_UPSTREAM: server-rules-db
+    volumes:
+      - server-rules-standby-1-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      server-rules-db:
+        condition: service_healthy
+
+  server-rules-db-standby-2:
+    <<: *ha
+    environment:
+      <<: *rules-env
+      NODE_MODE: standby
+      NODE_NAME: server-rules-db-standby-2
+      REPLICATION_UPSTREAM: server-rules-db
+    volumes:
+      - server-rules-standby-2-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      server-rules-db:
+        condition: service_healthy
+
+  university-record-db:
+    <<: *ha
+    environment:
+      <<: *record-env
+      NODE_MODE: primary
+      NODE_NAME: university-record-db
+    volumes:
+      - university-record-db-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+      - ./infrastructure/replication/postgres/init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+
+  university-record-db-standby-1:
+    <<: *ha
+    environment:
+      <<: *record-env
+      NODE_MODE: standby
+      NODE_NAME: university-record-db-standby-1
+      REPLICATION_UPSTREAM: university-record-db
+    volumes:
+      - university-record-standby-1-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      university-record-db:
+        condition: service_healthy
+
+  university-record-db-standby-2:
+    <<: *ha
+    environment:
+      <<: *record-env
+      NODE_MODE: standby
+      NODE_NAME: university-record-db-standby-2
+      REPLICATION_UPSTREAM: university-record-db
+    volumes:
+      - university-record-standby-2-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      university-record-db:
+        condition: service_healthy
+
+  # Merge only DB_URL. Keep two app replicas, real Session/Broker/Discovery and Redis settings.
+  server-rules-service:
+    environment:
+      DB_URL: jdbc:postgresql://server-rules-db:5432,server-rules-db-standby-1:5432,server-rules-db-standby-2:5432/rules_db?targetServerType=primary&hostRecheckSeconds=1&connectTimeout=2&socketTimeout=5&tcpKeepAlive=true
+
+  university-record-service:
+    environment:
+      DB_URL: jdbc:postgresql://university-record-db:5432,university-record-db-standby-1:5432,university-record-db-standby-2:5432/record_db?targetServerType=primary&hostRecheckSeconds=1&connectTimeout=2&socketTimeout=5&tcpKeepAlive=true
+
   moderation-db:
     profiles: [legacy-databases]
   moderation-db-1:
@@ -195,8 +309,11 @@ services:
       redis:
         condition: service_healthy
 
+
   analytics-scheduler:
     environment:
+      RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
+      RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
       MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
       DISCORD_DSN: ${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}
     depends_on: !override
@@ -218,8 +335,11 @@ services:
         condition: service_healthy
       university-record-db:
         condition: service_healthy
+
   analytics-etl:
     environment:
+      RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
+      RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
       MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
       DISCORD_DSN: ${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}
     depends_on: !override
@@ -243,6 +363,10 @@ services:
         condition: service_healthy
 
 volumes:
+  server-rules-standby-1-data:
+  server-rules-standby-2-data:
+  university-record-standby-1-data:
+  university-record-standby-2-data:\
   moderation-replica-1:
   moderation-replica-2:
   moderation-replica-3:

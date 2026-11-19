@@ -14,6 +14,9 @@
 
 name: pad-team-17
 
+# Grade 5 private DB replication is enabled explicitly with docker-compose.replication.yml.
+# See docs/lab5-private-db-replication.md before changing an existing deployment.
+
 # Analytics runs from a published image; no private source checkout is needed.
 x-analytics-environment: &analytics-environment
   WAREHOUSE_DSN: ${ANALYTICS_WAREHOUSE_DSN:?Set ANALYTICS_WAREHOUSE_DSN}
