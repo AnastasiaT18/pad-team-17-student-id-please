@@ -2,8 +2,9 @@
 
 ## Scope and status
 
-`docker-compose.replication.yml` is an explicit overlay for Server Rules and University
-Record. Each database gets one initial primary and two asynchronous physical standbys.
+`docker-compose.replication.yml` is now a shared overlay covering Server Rules, University
+Record, Moderation and Discord. This guide covers the first two; their databases each get
+one initial primary and two asynchronous physical standbys.
 It uses the published `postgres:18` image with public CPR scripts mounted read-only;
 teammates do not need access to private repositories or a custom database image.
 
@@ -35,11 +36,31 @@ flowchart LR
 
 ## Configure and prepare existing data
 
-Prerequisites: Bash 3.2+, jq, Docker Compose v2+, the currently running original PG18
+Prerequisites: Bash 3.2+, jq, Docker Compose 2.24.4+, the currently running original PG18
 primaries, and working source-reader credentials from the analytics setup. Perform
 enablement between game sessions: it briefly stops/recreates the selected service's app
 containers and restarts its primary. Keep the existing Compose project name and `.env`.
 Do not use `down -v`, rename primary volumes, or import an empty database over existing data.
+
+The merged overlay also requires the released Moderation/Discord application and database
+image references, replication passwords and router-based analytics DSNs from
+[the other pair's cutover guide](database-replication.md). Complete and validate that
+pair's cutover before recreating the shared scheduler with this overlay; otherwise its
+Moderation/Discord DSNs would point at unprepared routers. Do not run both pairs' cutover
+operations concurrently. Neither pair's operator replaces the other's preparation steps.
+
+Use the same project and routing-state root for all operators. For the default project:
+
+```bash
+export CPR_PROJECT_NAME=pad-team-17
+export REPLICATION_STATE_ROOT="$PWD/.replication/$CPR_PROJECT_NAME"
+```
+
+Use your actual existing project name if different. Our operator accepts the shared
+`CPR_PROJECT_NAME` and `CPR_ENV_FILE` settings (and the earlier `CPR_HA_PROJECT` /
+`CPR_HA_ENV_FILE` aliases). It derives a missing routing-state root from that project.
+Plain Compose commands need the exported `REPLICATION_STATE_ROOT` too; keep it pointing
+at the directory initialized by the Moderation/Discord scripts.
 
 Add the following settings to your existing `.env` using `.env.example` as the template:
 
@@ -55,6 +76,11 @@ From CPR, validate the overlay without starting anything:
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.replication.yml config --quiet
 ```
+
+For a configuration-only regression with Node.js 24 and Docker Compose installed, run
+`node tests/verify-replication-config.mjs`. It uses placeholder image references without
+pulling images or contacting Docker Engine and checks both teams' overlay settings. The
+manual replication CI workflow also runs it before its existing Moderation/Discord live tests.
 
 Back up and prepare each original primary:
 

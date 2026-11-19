@@ -11,12 +11,16 @@ case "$CLUSTER" in
 esac
 command -v jq >/dev/null || { echo 'jq is required' >&2; exit 1; }
 COMPOSE=(docker compose --project-directory "$ROOT")
-[[ -z "${CPR_HA_ENV_FILE:-}" ]] || COMPOSE+=(--env-file "$CPR_HA_ENV_FILE")
-[[ -z "${CPR_HA_PROJECT:-}" ]] || COMPOSE+=(--project-name "$CPR_HA_PROJECT")
-COMPOSE+=(-f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.replication.yml")
+envfile=${CPR_HA_ENV_FILE:-${CPR_ENV_FILE:-}}
+project_override=${CPR_HA_PROJECT:-${CPR_PROJECT_NAME:-}}
+[[ -z "$envfile" ]] || COMPOSE+=(--env-file "$envfile")
+[[ -z "$project_override" ]] || COMPOSE+=(--project-name "$project_override")
 # Never print resolved config: it contains credentials. Extract only the project name.
-PROJECT=$("${COMPOSE[@]}" config --format json | jq -r '.name')
+PROJECT=$("${COMPOSE[@]}" -f "$ROOT/docker-compose.yml" config --format json | jq -r '.name')
 [[ "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo 'Invalid project name' >&2; exit 1; }
+# Match the routing-state root exported by the Moderation/Discord operator scripts.
+export REPLICATION_STATE_ROOT=${REPLICATION_STATE_ROOT:-$ROOT/.replication/$PROJECT}
+COMPOSE+=(-f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.replication.yml")
 NODES=("$INITIAL_PRIMARY" "$INITIAL_PRIMARY-standby-1" "$INITIAL_PRIMARY-standby-2")
 die() { echo "ERROR: $*" >&2; exit 1; }
 node() { local n; for n in "${NODES[@]}"; do [[ "$1" != "$n" ]] || return 0; done; die "Unknown node: $1"; }
@@ -229,8 +233,8 @@ enable() {
   echo 'Enabled. Check both application replicas in Discovery before sending traffic.'
 }
 
-# Atomic mkdir works on macOS and Linux without a flock executable. The verify command
-# holds the lock across Maven; its child commands inherit a checked ownership token.
+# Atomic mkdir works on macOS and Linux without a flock executable.
+# Child commands may inherit a checked ownership token from an owning operator process.
 LOCK="$ROOT/.replication-state/$PROJECT-$CLUSTER.lock.d"
 mkdir -p "$ROOT/.replication-state"
 if [[ -n "${HA_LOCK_TOKEN:-}" && -f "$LOCK/owner" && -f "$LOCK/token" && "$(cat "$LOCK/token")" == "$HA_LOCK_TOKEN" ]] && kill -0 "$(cat "$LOCK/owner")" 2>/dev/null; then

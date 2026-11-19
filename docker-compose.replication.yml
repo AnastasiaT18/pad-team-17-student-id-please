@@ -1,4 +1,5 @@
-# Explicit Grade 5 overlay. Reuses existing PG18 primary volumes; no private source/build needed.
+# Shared Grade 5 overlay for four private databases. Each owner keeps their own cutover tooling.
+# Rules/Records retain PG18 primary volumes; Moderation/Discord use prepared routers/new clusters.
 x-ha: &ha
   image: postgres:18
   entrypoint: ["sh", "/opt/pad17-ha/start.sh"]
@@ -366,7 +367,7 @@ volumes:
   server-rules-standby-1-data:
   server-rules-standby-2-data:
   university-record-standby-1-data:
-  university-record-standby-2-data:\
+  university-record-standby-2-data:
   moderation-replica-1:
   moderation-replica-2:
   moderation-replica-3:
