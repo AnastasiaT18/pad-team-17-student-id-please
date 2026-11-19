@@ -3278,3 +3278,7 @@ claiming authenticated socket access; these Compose changes alone do not authent
 
 Keep the application service ports internal. Restricting proxy paths closes the direct public
 REST bypass; resource-level checks inside the service remain necessary for authenticated users.
+
+## Private database replication
+
+Moderation and Discord DMs have an opt-in PostgreSQL replication overlay with two standbys each. See [the deployment and recovery runbook](docs/database-replication.md) for published-image requirements, backup/restore into new volumes, application and ETL routing, failover, and rollback boundaries. The original database volumes are retained during cutover.
