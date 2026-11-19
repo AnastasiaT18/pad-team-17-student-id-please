@@ -39,6 +39,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Validate combined replication configuration
+        run: node tests/verify-replication-config.mjs
       - name: Pull the specified releases
         run: |
           docker pull "$TEST_MODERATION_APP_IMAGE"

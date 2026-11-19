@@ -23,3 +23,5 @@ npm-debug.log*
 # Local database routing state and backups (contain private database data)
 .replication/
 .replication-backups/
+.replication-state/
+infrastructure/backups/
