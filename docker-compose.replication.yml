@@ -1,0 +1,257 @@
+# Opt-in overlay. Keep docker-compose.yml alone for the original deployment.
+# Use scripts/database-replication.sh to initialize routing state before starting.
+services:
+  moderation-db:
+    profiles: [legacy-databases]
+  moderation-db-1:
+    image: ${MODERATION_DATABASE_IMAGE:?Set the released moderation PostgreSQL image}
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      NODE_NAME: db-1
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+      POSTGRES_DB: moderation
+      REPLICATION_PASSWORD: ${MODERATION_REPLICATION_PASSWORD:?Set a replication password}
+    volumes:
+      - moderation-replica-1:/var/lib/postgresql/data
+    networks:
+      moderation-replication:
+        aliases: [db-1]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 20s
+  moderation-db-2:
+    image: ${MODERATION_DATABASE_IMAGE:?Set the released moderation PostgreSQL image}
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      NODE_NAME: db-2
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+      POSTGRES_DB: moderation
+      REPLICATION_PASSWORD: ${MODERATION_REPLICATION_PASSWORD:?Set a replication password}
+    volumes:
+      - moderation-replica-2:/var/lib/postgresql/data
+    networks:
+      moderation-replication:
+        aliases: [db-2]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 20s
+  moderation-db-3:
+    image: ${MODERATION_DATABASE_IMAGE:?Set the released moderation PostgreSQL image}
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      NODE_NAME: db-3
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+      POSTGRES_DB: moderation
+      REPLICATION_PASSWORD: ${MODERATION_REPLICATION_PASSWORD:?Set a replication password}
+    volumes:
+      - moderation-replica-3:/var/lib/postgresql/data
+    networks:
+      moderation-replication:
+        aliases: [db-3]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 20s
+  moderation-db-router:
+    image: haproxy:3.0-alpine
+    volumes:
+      - ${REPLICATION_STATE_ROOT:?Use the replication scripts}/moderation:/usr/local/etc/haproxy:ro
+    networks: [default, moderation-replication]
+    restart: unless-stopped
+
+  moderation-db-migrate:
+    image: ${MODERATION_REPLICATION_APP_IMAGE:?Set the released moderation application image}
+    profiles: [tools]
+    command: [node, dist/database/migrate.js]
+    environment:
+      DB_HOST: moderation-db-router
+      DB_PORT: 5432
+      DB_USERNAME: ${MODERATION_DB_USER}
+      DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      DB_NAME: moderation
+      DB_SYNCHRONIZE: "false"
+
+  moderation-service:
+    image: ${MODERATION_REPLICATION_APP_IMAGE}
+    environment:
+      DB_HOST: moderation-db-router
+      DB_SYNCHRONIZE: "false"
+    depends_on: !override
+      moderation-db-router:
+        condition: service_started
+      discovery-service:
+        condition: service_healthy
+      message-broker:
+        condition: service_healthy
+
+  discord-dms-db:
+    profiles: [legacy-databases]
+  discord-dms-db-1:
+    image: ${DISCORD_DMS_DATABASE_IMAGE:?Set the released discord-dms PostgreSQL image}
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      NODE_NAME: db-1
+      POSTGRES_USER: ${DISCORD_DMS_DB_USER}
+      POSTGRES_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      POSTGRES_DB: discord_dms
+      REPLICATION_PASSWORD: ${DISCORD_DMS_REPLICATION_PASSWORD:?Set a replication password}
+    volumes:
+      - discord-dms-replica-1:/var/lib/postgresql/data
+    networks:
+      discord-dms-replication:
+        aliases: [db-1]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 20s
+  discord-dms-db-2:
+    image: ${DISCORD_DMS_DATABASE_IMAGE:?Set the released discord-dms PostgreSQL image}
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      NODE_NAME: db-2
+      POSTGRES_USER: ${DISCORD_DMS_DB_USER}
+      POSTGRES_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      POSTGRES_DB: discord_dms
+      REPLICATION_PASSWORD: ${DISCORD_DMS_REPLICATION_PASSWORD:?Set a replication password}
+    volumes:
+      - discord-dms-replica-2:/var/lib/postgresql/data
+    networks:
+      discord-dms-replication:
+        aliases: [db-2]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 20s
+  discord-dms-db-3:
+    image: ${DISCORD_DMS_DATABASE_IMAGE:?Set the released discord-dms PostgreSQL image}
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      NODE_NAME: db-3
+      POSTGRES_USER: ${DISCORD_DMS_DB_USER}
+      POSTGRES_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      POSTGRES_DB: discord_dms
+      REPLICATION_PASSWORD: ${DISCORD_DMS_REPLICATION_PASSWORD:?Set a replication password}
+    volumes:
+      - discord-dms-replica-3:/var/lib/postgresql/data
+    networks:
+      discord-dms-replication:
+        aliases: [db-3]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 20s
+  discord-dms-db-router:
+    image: haproxy:3.0-alpine
+    volumes:
+      - ${REPLICATION_STATE_ROOT:?Use the replication scripts}/discord-dms:/usr/local/etc/haproxy:ro
+    networks: [default, discord-dms-replication]
+    restart: unless-stopped
+
+  discord-dms-db-migrate:
+    image: ${DISCORD_DMS_REPLICATION_APP_IMAGE:?Set the released discord-dms application image}
+    profiles: [tools]
+    command: [node, dist/database/migrate.js]
+    environment:
+      DB_HOST: discord-dms-db-router
+      DB_PORT: 5432
+      DB_USERNAME: ${DISCORD_DMS_DB_USER}
+      DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      DB_NAME: discord_dms
+      DB_SYNCHRONIZE: "false"
+
+  discord-dms-service:
+    image: ${DISCORD_DMS_REPLICATION_APP_IMAGE}
+    environment:
+      DB_HOST: discord-dms-db-router
+      DB_SYNCHRONIZE: "false"
+    depends_on: !override
+      discord-dms-db-router:
+        condition: service_started
+      discovery-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  analytics-scheduler:
+    environment:
+      MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
+      DISCORD_DSN: ${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}
+    depends_on: !override
+      analytics-migrate:
+        condition: service_completed_successfully
+      moderation-db-router:
+        condition: service_started
+      discord-dms-db-router:
+        condition: service_started
+      player-db:
+        condition: service_healthy
+      server-moderation-session-db:
+        condition: service_healthy
+      applicant-db:
+        condition: service_healthy
+      credential-db:
+        condition: service_healthy
+      server-rules-db:
+        condition: service_healthy
+      university-record-db:
+        condition: service_healthy
+  analytics-etl:
+    environment:
+      MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
+      DISCORD_DSN: ${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}
+    depends_on: !override
+      analytics-migrate:
+        condition: service_completed_successfully
+      moderation-db-router:
+        condition: service_started
+      discord-dms-db-router:
+        condition: service_started
+      player-db:
+        condition: service_healthy
+      server-moderation-session-db:
+        condition: service_healthy
+      applicant-db:
+        condition: service_healthy
+      credential-db:
+        condition: service_healthy
+      server-rules-db:
+        condition: service_healthy
+      university-record-db:
+        condition: service_healthy
+
+volumes:
+  moderation-replica-1:
+  moderation-replica-2:
+  moderation-replica-3:
+  discord-dms-replica-1:
+  discord-dms-replica-2:
+  discord-dms-replica-3:
+
+networks:
+  moderation-replication:
+    internal: true
+  discord-dms-replication:
+    internal: true
