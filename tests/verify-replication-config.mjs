@@ -59,11 +59,40 @@ for (const service of ['analytics-scheduler', 'analytics-etl']) {
   assert.ok(values.DISCORD_DSN.includes('discord-dms-db-router'));
   for (const key of ['RULES_DSN', 'RECORD_DSN']) assert.ok(values[key].includes('target_session_attrs=read-write'));
   for (const [key, value] of Object.entries(base.services[service].environment)) {
-    if (!['MODERATION_DSN', 'DISCORD_DSN', 'RULES_DSN', 'RECORD_DSN'].includes(key)) assert.equal(values[key], value);
+    if (!['MODERATION_DSN', 'DISCORD_DSN', 'RULES_DSN', 'RECORD_DSN', 'PLAYER_DSN', 'SESSION_DSN'].includes(key)) assert.equal(values[key], value);
   }
   assert.ok(merged.services[service].depends_on['moderation-db-router']);
   assert.ok(merged.services[service].depends_on['discord-dms-db-router']);
   assert.ok(!merged.services[service].depends_on['moderation-db']);
   assert.ok(!merged.services[service].depends_on['discord-dms-db']);
 }
-console.log('PASS: all four replication clusters, original Rules/Records volumes, real app dependencies and all four ETL DSNs preserved');
+const playerSessionClusters = [
+  ['player', 'player-service', 'player-db', 'PLAYER_DSN'],
+  ['session', 'server-moderation-session-service', 'server-moderation-session-db', 'SESSION_DSN'],
+];
+for (const [pair, app, legacyDb, dsn] of playerSessionClusters) {
+  const nodes = [1, 2, 3].map(n => `${pair}-db-${n}`);
+  const appService = merged.services[app];
+  assert.deepEqual(merged.services[legacyDb].profiles, ['legacy-databases']);
+  assert.equal(appService.environment.DB_HOSTS, nodes.join(','));
+  assert.equal(appService.environment.DB_HOST, undefined);
+  assert.equal(appService.deploy.replicas, base.services[app].deploy.replicas);
+  assert.ok(!appService.depends_on[legacyDb]);
+  assert.equal(merged.networks[`${pair}-replication`].internal, true);
+  assert.ok(Object.hasOwn(appService.networks, `${pair}-replication`));
+  for (const [index, node] of nodes.entries()) {
+    const database = merged.services[node];
+    assert.equal(database.image, 'janetag/pad-postgres-replication:17-lab5.1');
+    assert.equal(database.environment.NODE_NAME, `db-${index + 1}`);
+    assert.deepEqual(database.profiles, ['player-session-replication-nodes']);
+    assert.equal(database.volumes[0].source, `${pair}-replica-${index + 1}`);
+  }
+  for (const job of ['analytics-scheduler', 'analytics-etl']) {
+    const analytics = merged.services[job];
+    assert.ok(analytics.environment[dsn].includes('target_session_attrs=primary'));
+    for (const node of nodes) assert.ok(analytics.environment[dsn].includes(node));
+    assert.ok(Object.hasOwn(analytics.networks, `${pair}-replication`));
+    assert.ok(!analytics.depends_on[legacyDb]);
+  }
+}
+console.log('PASS: all six replication clusters, app dependencies and ETL routing');

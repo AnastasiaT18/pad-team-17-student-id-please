@@ -1,4 +1,4 @@
-# Shared Grade 5 overlay for four private databases. Each owner keeps their own cutover tooling.
+# Shared Grade 5 overlay for six private databases. Each owner keeps their own cutover tooling.
 # Rules/Records retain PG18 primary volumes; Moderation/Discord use prepared routers/new clusters.
 x-ha: &ha
   image: postgres:18
@@ -27,6 +27,31 @@ x-record-env: &record-env
   POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
   REPLICATION_PASSWORD: ${UNIVERSITY_RECORD_REPLICATION_PASSWORD:?Set UNIVERSITY_RECORD_REPLICATION_PASSWORD}
   PGDATA: /var/lib/postgresql/18/docker
+
+x-player-session-db: &player-session-db
+  image: janetag/pad-postgres-replication:17-lab5.1
+  profiles: [player-session-replication-nodes]
+  restart: "no"
+  stop_grace_period: 20s
+  healthcheck:
+    test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+    interval: 2s
+    timeout: 3s
+    retries: 60
+
+x-player-db-env: &player-db-env
+  PGDATA: /var/lib/postgresql/data/pgdata
+  POSTGRES_DB: player
+  POSTGRES_USER: ${PLAYER_DB_USER}
+  POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
+  REPLICATION_PASSWORD: ${PLAYER_REPLICATION_PASSWORD:?Set PLAYER_REPLICATION_PASSWORD}
+
+x-session-db-env: &session-db-env
+  PGDATA: /var/lib/postgresql/data/pgdata
+  POSTGRES_DB: server_moderation_session
+  POSTGRES_USER: ${SERVER_MODERATION_SESSION_DB_USER}
+  POSTGRES_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
+  REPLICATION_PASSWORD: ${SESSION_REPLICATION_PASSWORD:?Set SESSION_REPLICATION_PASSWORD}
 
 services:
   server-rules-db:
@@ -311,8 +336,101 @@ services:
         condition: service_healthy
 
 
-  analytics-scheduler:
+  player-db:
+    profiles: [legacy-databases]
+
+  server-moderation-session-db:
+    profiles: [legacy-databases]
+
+  player-db-1:
+    <<: *player-session-db
     environment:
+      <<: *player-db-env
+      NODE_NAME: db-1
+    volumes:
+      - player-replica-1:/var/lib/postgresql/data
+    networks:
+      player-replication:
+        aliases: [db-1]
+
+  player-db-2:
+    <<: *player-session-db
+    environment:
+      <<: *player-db-env
+      NODE_NAME: db-2
+    volumes:
+      - player-replica-2:/var/lib/postgresql/data
+    networks:
+      player-replication:
+        aliases: [db-2]
+
+  player-db-3:
+    <<: *player-session-db
+    environment:
+      <<: *player-db-env
+      NODE_NAME: db-3
+    volumes:
+      - player-replica-3:/var/lib/postgresql/data
+    networks:
+      player-replication:
+        aliases: [db-3]
+
+  session-db-1:
+    <<: *player-session-db
+    environment:
+      <<: *session-db-env
+      NODE_NAME: db-1
+    volumes:
+      - session-replica-1:/var/lib/postgresql/data
+    networks:
+      session-replication:
+        aliases: [db-1]
+
+  session-db-2:
+    <<: *player-session-db
+    environment:
+      <<: *session-db-env
+      NODE_NAME: db-2
+    volumes:
+      - session-replica-2:/var/lib/postgresql/data
+    networks:
+      session-replication:
+        aliases: [db-2]
+
+  session-db-3:
+    <<: *player-session-db
+    environment:
+      <<: *session-db-env
+      NODE_NAME: db-3
+    volumes:
+      - session-replica-3:/var/lib/postgresql/data
+    networks:
+      session-replication:
+        aliases: [db-3]
+
+  player-service:
+    environment:
+      DB_HOST: !reset null
+      DB_HOSTS: player-db-1,player-db-2,player-db-3
+    networks: [default, player-replication]
+    depends_on: !override
+      discovery-service:
+        condition: service_healthy
+
+  server-moderation-session-service:
+    environment:
+      DB_HOST: !reset null
+      DB_HOSTS: session-db-1,session-db-2,session-db-3
+    networks: [default, session-replication]
+    depends_on: !override
+      message-broker:
+        condition: service_healthy
+
+  analytics-scheduler:
+    networks: [default, player-replication, session-replication]
+    environment:
+      PLAYER_DSN: ${ANALYTICS_PLAYER_HA_DSN:?Set ANALYTICS_PLAYER_HA_DSN}
+      SESSION_DSN: ${ANALYTICS_SESSION_HA_DSN:?Set ANALYTICS_SESSION_HA_DSN}
       RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
       RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
       MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
@@ -324,10 +442,6 @@ services:
         condition: service_started
       discord-dms-db-router:
         condition: service_started
-      player-db:
-        condition: service_healthy
-      server-moderation-session-db:
-        condition: service_healthy
       applicant-db:
         condition: service_healthy
       credential-db:
@@ -338,7 +452,10 @@ services:
         condition: service_healthy
 
   analytics-etl:
+    networks: [default, player-replication, session-replication]
     environment:
+      PLAYER_DSN: ${ANALYTICS_PLAYER_HA_DSN:?Set ANALYTICS_PLAYER_HA_DSN}
+      SESSION_DSN: ${ANALYTICS_SESSION_HA_DSN:?Set ANALYTICS_SESSION_HA_DSN}
       RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
       RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
       MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
@@ -350,10 +467,6 @@ services:
         condition: service_started
       discord-dms-db-router:
         condition: service_started
-      player-db:
-        condition: service_healthy
-      server-moderation-session-db:
-        condition: service_healthy
       applicant-db:
         condition: service_healthy
       credential-db:
@@ -375,8 +488,19 @@ volumes:
   discord-dms-replica-2:
   discord-dms-replica-3:
 
+  player-replica-1:
+  player-replica-2:
+  player-replica-3:
+  session-replica-1:
+  session-replica-2:
+  session-replica-3:
+
 networks:
   moderation-replication:
     internal: true
   discord-dms-replication:
+    internal: true
+  player-replication:
+    internal: true
+  session-replication:
     internal: true
