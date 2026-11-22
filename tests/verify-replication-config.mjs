@@ -14,14 +14,19 @@ const env = {
   DISCORD_DMS_DATABASE_IMAGE: 'config-validation/discord-postgres:local',
   REPLICATION_STATE_ROOT: resolve(tmpdir(), 'pad17-config-validation'),
 };
-function config(overlay) {
+function config(overlay, overrides = {}) {
   const args = ['compose', '--env-file', '.env.example', '--profile', '*', '-f', 'docker-compose.yml'];
   if (overlay) args.push('-f', 'docker-compose.replication.yml');
   args.push('config', '--format', 'json');
-  return JSON.parse(execFileSync('docker', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+  return JSON.parse(execFileSync('docker', args, { cwd: root, env: { ...env, ...overrides }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
 }
 const base = config(false);
-const merged = config(true);
+const merged = config(true, {
+  PLAYER_REPLICATION_PASSWORD: '',
+  SESSION_REPLICATION_PASSWORD: '',
+  ANALYTICS_PLAYER_HA_DSN: '',
+  ANALYTICS_SESSION_HA_DSN: '',
+});
 for (const [database, app, volume] of [
   ['server-rules-db', 'server-rules-service', 'server-rules-db-data'],
   ['university-record-db', 'university-record-service', 'university-record-db-data'],
@@ -59,11 +64,44 @@ for (const service of ['analytics-scheduler', 'analytics-etl']) {
   assert.ok(values.DISCORD_DSN.includes('discord-dms-db-router'));
   for (const key of ['RULES_DSN', 'RECORD_DSN']) assert.ok(values[key].includes('target_session_attrs=read-write'));
   for (const [key, value] of Object.entries(base.services[service].environment)) {
-    if (!['MODERATION_DSN', 'DISCORD_DSN', 'RULES_DSN', 'RECORD_DSN'].includes(key)) assert.equal(values[key], value);
+    if (!['MODERATION_DSN', 'DISCORD_DSN', 'RULES_DSN', 'RECORD_DSN', 'PLAYER_DSN', 'SESSION_DSN'].includes(key)) assert.equal(values[key], value);
   }
   assert.ok(merged.services[service].depends_on['moderation-db-router']);
   assert.ok(merged.services[service].depends_on['discord-dms-db-router']);
   assert.ok(!merged.services[service].depends_on['moderation-db']);
   assert.ok(!merged.services[service].depends_on['discord-dms-db']);
 }
-console.log('PASS: all four replication clusters, original Rules/Records volumes, real app dependencies and all four ETL DSNs preserved');
+const playerSessionClusters = [
+  ['player', 'player-service', 'player-db', 'PLAYER_DSN'],
+  ['session', 'server-moderation-session-service', 'server-moderation-session-db', 'SESSION_DSN'],
+];
+for (const [pair, app, legacyDb, dsn] of playerSessionClusters) {
+  const nodes = [1, 2, 3].map(n => `${pair}-db-${n}`);
+  const appService = merged.services[app];
+  assert.deepEqual(merged.services[legacyDb].profiles, ['legacy-databases']);
+  assert.equal(appService.environment.DB_HOSTS, nodes.join(','));
+  assert.equal(appService.environment.DB_HOST, undefined);
+  assert.equal(appService.deploy.replicas, base.services[app].deploy.replicas);
+  assert.ok(!appService.depends_on[legacyDb]);
+  assert.equal(merged.networks[`${pair}-replication`].internal, true);
+  assert.ok(Object.hasOwn(appService.networks, `${pair}-replication`));
+  for (const [index, node] of nodes.entries()) {
+    const database = merged.services[node];
+    assert.equal(database.image, 'janetag/pad-postgres-replication:17-lab5.1');
+    assert.equal(database.environment.NODE_NAME, `db-${index + 1}`);
+    assert.deepEqual(database.profiles, ['player-session-replication-nodes']);
+    assert.equal(database.volumes[0].source, `${pair}-replica-${index + 1}`);
+  }
+  const activeDsn = `postgresql://analytics_reader:fixture@${nodes.join(',')}/test?target_session_attrs=primary`;
+  const active = config(true, { [`CPR_ANALYTICS_${dsn}`]: activeDsn });
+  for (const job of ['analytics-scheduler', 'analytics-etl']) {
+    const analytics = merged.services[job];
+    assert.equal(analytics.environment[dsn], base.services[job].environment[dsn]);
+    assert.equal(active.services[job].environment[dsn], activeDsn);
+    const other = dsn === 'PLAYER_DSN' ? 'SESSION_DSN' : 'PLAYER_DSN';
+    assert.equal(active.services[job].environment[other], base.services[job].environment[other]);
+    assert.ok(Object.hasOwn(analytics.networks, `${pair}-replication`));
+    assert.ok(!analytics.depends_on[legacyDb]);
+  }
+}
+console.log('PASS: all six replication clusters, app dependencies and ETL routing');
