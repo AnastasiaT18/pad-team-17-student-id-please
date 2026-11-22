@@ -127,6 +127,19 @@ mkdir -p "$REPLICATION_STATE_DIR"
 mkdir "$REPLICATION_STATE_DIR/lock" 2>/dev/null || fail 'Another operation or an interrupted command holds the lock; inspect before removing it'
 trap 'rmdir "$REPLICATION_STATE_DIR/lock"' EXIT
 command=${1:-status}
+if [ "$uses_router" = 0 ]; then
+  case "$command" in
+    prepare|up|rejoin)
+      case "$pair" in
+        player) password_key=PLAYER_REPLICATION_PASSWORD ;;
+        session) password_key=SESSION_REPLICATION_PASSWORD ;;
+      esac
+      settings=$(compose config --environment) || fail 'Could not resolve Compose environment'
+      grep -q "^$password_key=." <<< "$settings" || fail "Set $password_key before preparing or rebuilding $pair"
+      unset settings
+      ;;
+  esac
+fi
 case "$command" in
   up|prepare)
     [ ! -f "$REPLICATION_STATE_DIR/pending" ] || fail 'Complete the pending failover first'

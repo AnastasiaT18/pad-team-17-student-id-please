@@ -1,1 +1,2 @@
 scripts/database-replication.sh text eol=lf
+scripts/replication-cutover.sh text eol=lf

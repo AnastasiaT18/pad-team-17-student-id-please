@@ -97,6 +97,13 @@ bash scripts/replication-cutover.sh verify
 bash scripts/replication-cutover.sh activate
 ```
 
+The cutover command resumes Analytics with each source routed according to its
+activation record. Player and Session remain on their original database DSNs
+until their own cutover is activated. Keep both the original and replicated DSNs.
+If you need to recreate the scheduler later, run
+`bash scripts/replication-cutover.sh resume-analytics` to apply the recorded
+routing.
+
 Restore refuses nonempty target databases. It checks backup checksums, restores roles and database contents transactionally, compares every public table's records, creates both standbys, and runs the versioned baseline migrations on the writer. Matching existing schemas are adopted; incompatible schemas are rejected.
 
 `verify` checks the recorded writer identity, both standby receivers and replay progress, then runs real reconciliation ETL through the proxies using the preserved reader credentials. It must succeed before activation. The existing analytics warehouse must be available.

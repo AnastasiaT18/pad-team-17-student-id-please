@@ -44,14 +44,14 @@ x-player-db-env: &player-db-env
   POSTGRES_DB: player
   POSTGRES_USER: ${PLAYER_DB_USER}
   POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
-  REPLICATION_PASSWORD: ${PLAYER_REPLICATION_PASSWORD:?Set PLAYER_REPLICATION_PASSWORD}
+  REPLICATION_PASSWORD: ${PLAYER_REPLICATION_PASSWORD:-}
 
 x-session-db-env: &session-db-env
   PGDATA: /var/lib/postgresql/data/pgdata
   POSTGRES_DB: server_moderation_session
   POSTGRES_USER: ${SERVER_MODERATION_SESSION_DB_USER}
   POSTGRES_PASSWORD: ${SERVER_MODERATION_SESSION_DB_PASSWORD}
-  REPLICATION_PASSWORD: ${SESSION_REPLICATION_PASSWORD:?Set SESSION_REPLICATION_PASSWORD}
+  REPLICATION_PASSWORD: ${SESSION_REPLICATION_PASSWORD:-}
 
 services:
   server-rules-db:
@@ -429,12 +429,12 @@ services:
   analytics-scheduler:
     networks: [default, player-replication, session-replication]
     environment:
-      PLAYER_DSN: ${ANALYTICS_PLAYER_HA_DSN:?Set ANALYTICS_PLAYER_HA_DSN}
-      SESSION_DSN: ${ANALYTICS_SESSION_HA_DSN:?Set ANALYTICS_SESSION_HA_DSN}
+      PLAYER_DSN: ${CPR_ANALYTICS_PLAYER_DSN:-${ANALYTICS_PLAYER_DSN}}
+      SESSION_DSN: ${CPR_ANALYTICS_SESSION_DSN:-${ANALYTICS_SESSION_DSN}}
       RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
       RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
-      MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
-      DISCORD_DSN: ${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}
+      MODERATION_DSN: ${CPR_ANALYTICS_MODERATION_DSN:-${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}}
+      DISCORD_DSN: ${CPR_ANALYTICS_DISCORD_DSN:-${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}}
     depends_on: !override
       analytics-migrate:
         condition: service_completed_successfully
@@ -454,12 +454,12 @@ services:
   analytics-etl:
     networks: [default, player-replication, session-replication]
     environment:
-      PLAYER_DSN: ${ANALYTICS_PLAYER_HA_DSN:?Set ANALYTICS_PLAYER_HA_DSN}
-      SESSION_DSN: ${ANALYTICS_SESSION_HA_DSN:?Set ANALYTICS_SESSION_HA_DSN}
+      PLAYER_DSN: ${CPR_ANALYTICS_PLAYER_DSN:-${ANALYTICS_PLAYER_DSN}}
+      SESSION_DSN: ${CPR_ANALYTICS_SESSION_DSN:-${ANALYTICS_SESSION_DSN}}
       RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
       RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
-      MODERATION_DSN: ${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}
-      DISCORD_DSN: ${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}
+      MODERATION_DSN: ${CPR_ANALYTICS_MODERATION_DSN:-${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}}
+      DISCORD_DSN: ${CPR_ANALYTICS_DISCORD_DSN:-${ANALYTICS_DISCORD_REPLICATION_DSN:?Set the reader DSN using discord-dms-db-router}}
     depends_on: !override
       analytics-migrate:
         condition: service_completed_successfully
