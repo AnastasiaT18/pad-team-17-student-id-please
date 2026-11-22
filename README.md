@@ -112,6 +112,10 @@ scripted manual failover. The original primary volumes are retained. Read the
 [preparation, backup, enablement and verification procedure](docs/lab5-private-db-replication.md)
 before enabling it; do not replace an existing database with an empty one.
 
+Player and Server Moderation Session use the same overlay with their own
+PostgreSQL 17 clusters. See the [Player and Session runbook](docs/player-session-replication.md)
+for setup, cutover, and failover.
+
 ### Monitoring: Prometheus, Loki and Grafana (Lab 4)
 
 Grade 10. `docker compose up -d` also starts the monitoring; nothing else is needed.
