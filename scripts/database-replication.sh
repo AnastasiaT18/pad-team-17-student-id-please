@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-pair=${1:?Usage: database-replication.sh moderation|discord-dms prepare|up|status|failover|complete|rejoin|stop}
-case "$pair" in moderation|discord-dms) ;; *) echo 'Unknown private service' >&2; exit 2;; esac
+pair=${1:?Usage: database-replication.sh moderation|discord-dms|player|session prepare|up|status|verify|failover|complete|rejoin|stop}
+case "$pair" in
+  moderation|discord-dms) uses_router=1 ;;
+  player|session) uses_router=0 ;;
+  *) echo 'Unknown private service' >&2; exit 2 ;;
+esac
 shift
+database_services=("$pair-db-1" "$pair-db-2" "$pair-db-3")
+runtime_services=("${database_services[@]}")
+pull_services=("$pair-db-1")
+if [ "$uses_router" = 1 ]; then
+  runtime_services+=("$pair-db-router")
+  pull_services+=("$pair-db-migrate" "$pair-db-router")
+fi
 export COMPOSE_PROJECT_NAME=${CPR_PROJECT_NAME:-pad-team-17}
 [[ "$COMPOSE_PROJECT_NAME" =~ ^[a-z0-9][a-z0-9-]+$ ]] || exit 2
 export REPLICATION_STATE_ROOT="$PWD/.replication/$COMPOSE_PROJECT_NAME"
@@ -26,9 +37,8 @@ wait_sql() {
 metadata() {
   sql "$1" "SELECT system_identifier FROM pg_control_system(); SELECT timeline_id FROM pg_control_checkpoint(); SELECT COALESCE(encode(pg_read_binary_file('pg_wal/' || upper(lpad(to_hex(timeline_id),8,'0')) || '.history',0,100000,true),'hex'),'root') FROM pg_control_checkpoint();"
 }
-route() {
+write_router_config() {
   local node=$1
-  node_name "$node"
   cat > "$REPLICATION_STATE_DIR/haproxy.cfg.tmp" <<CONFIG
 global
   log stdout format raw local0
@@ -50,6 +60,13 @@ backend writer
   server primary $node:5432 check inter 1s fall 2 rise 1 resolvers docker init-addr libc,none on-marked-down shutdown-sessions
 CONFIG
   mv "$REPLICATION_STATE_DIR/haproxy.cfg.tmp" "$REPLICATION_STATE_DIR/haproxy.cfg"
+}
+record_primary() {
+  local node=$1
+  node_name "$node"
+  if [ "$uses_router" = 1 ]; then
+    write_router_config "$node"
+  fi
   printf '%s\n' "$node" > "$REPLICATION_STATE_DIR/primary.tmp"
   mv "$REPLICATION_STATE_DIR/primary.tmp" "$REPLICATION_STATE_DIR/primary"
 }
@@ -93,12 +110,14 @@ complete_promotion() {
     wait_sql "$best" 'SELECT pg_is_in_recovery()' f
     sql "$best" 'CHECKPOINT' >/dev/null
     metadata "$best" > "$REPLICATION_STATE_DIR/identity.tmp"
-    route "$best"
-    compose up -d --no-deps "$pair-db-router"
-    compose restart "$pair-db-router"
+    record_primary "$best"
+    if [ "$uses_router" = 1 ]; then
+      compose up -d --no-deps "$pair-db-router"
+      compose restart "$pair-db-router"
+    fi
     mv "$REPLICATION_STATE_DIR/identity.tmp" "$REPLICATION_STATE_DIR/identity"
     rm "$REPLICATION_STATE_DIR/pending"
-    echo "Promoted $best; application connections now route there. Rejoin the other nodes explicitly."
+    echo "Promoted $best. New application connections can use this writer. Rejoin the other nodes explicitly."
 }
 if [ -d "$REPLICATION_STATE_ROOT/cutover-lock" ] && [ "${CPR_CUTOVER_IN_PROGRESS:-0}" != 1 ]; then
   fail 'A cutover operation is in progress'
@@ -116,10 +135,10 @@ case "$command" in
       for number in 1 2 3; do
         [ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" --filter "label=com.docker.compose.volume=$pair-replica-$number")" ] || fail 'Replica volumes exist without routing state; recover the state before starting'
       done
-      route db-1
+      record_primary db-1
     fi
     if [ "${REPLICATION_SKIP_PULL:-0}" != 1 ]; then
-      compose pull "$pair-db-1" "$pair-db-migrate" "$pair-db-router"
+      compose pull "${pull_services[@]}"
     fi
     primary=$(cat "$REPLICATION_STATE_DIR/primary")
     node_name "$primary"
@@ -132,17 +151,19 @@ case "$command" in
     mv "$REPLICATION_STATE_DIR/identity.tmp" "$REPLICATION_STATE_DIR/identity"
     [ "$command" != prepare ] || exit 0
     [ -f "$REPLICATION_STATE_DIR/restored" ] || fail 'Restore and verify the original database first; see the cutover script'
-    compose up -d --no-deps "$pair-db-1" "$pair-db-2" "$pair-db-3" "$pair-db-router"
+    compose up -d --no-deps "${runtime_services[@]}"
     for node in db-1 db-2 db-3; do
       [ "$node" = "$primary" ] || wait_sql "$node" 'SELECT pg_is_in_recovery()' t
     done
-    compose run --rm --no-deps "$pair-db-migrate"
+    if [ "$uses_router" = 1 ]; then
+      compose run --rm --no-deps "$pair-db-migrate"
+    fi
     ;;
   failover)
     [ -f "$REPLICATION_STATE_DIR/identity" ] || fail 'Initialize the cluster first'
     old=$(cat "$REPLICATION_STATE_DIR/primary")
     node_name "$old"
-    [ ! -f "$REPLICATION_STATE_DIR/pending" ] || fail 'A promotion is pending; use complete to finish routing it'
+    [ ! -f "$REPLICATION_STATE_DIR/pending" ] || fail 'A promotion is pending; use complete to finish it'
     requested=${2:-}
     [ -z "$requested" ] || node_name "$requested"
     [ "$requested" != "$old" ] || fail 'The current primary cannot be its own failover candidate'
@@ -209,12 +230,18 @@ case "$command" in
     echo "$pair: writer identity and both streaming standbys verified"
     ;;
   status)
-    compose ps -a "$pair-db-1" "$pair-db-2" "$pair-db-3" "$pair-db-router"
+    compose ps -a "${runtime_services[@]}"
     for node in db-1 db-2 db-3; do
       printf '%s: ' "$node"
       sql "$node" "SELECT CASE WHEN pg_is_in_recovery() THEN 'standby' ELSE 'primary' END, pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()" || true
     done
     ;;
-  stop) compose stop "$pair-db-router" "$pair-db-1" "$pair-db-2" "$pair-db-3" ;;
-  *) fail 'Usage: database-replication.sh PAIR prepare|up|status|failover [db-N]|complete|rejoin db-N --rebuild|stop' ;;
+  stop)
+    if [ "$uses_router" = 1 ]; then
+      compose stop "$pair-db-router" "${database_services[@]}"
+    else
+      compose stop "${database_services[@]}"
+    fi
+    ;;
+  *) fail 'Usage: database-replication.sh PAIR prepare|up|status|verify|failover [db-N]|complete|rejoin db-N --rebuild|stop' ;;
 esac
