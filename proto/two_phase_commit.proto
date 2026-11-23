@@ -1,0 +1,82 @@
+// gRPC contract of a two-phase commit participant (Lab 5, Grade 8): the calls the transaction
+// coordinator in the Message Broker makes to a service that owns one of the databases a workflow writes to.
+// Copy this file into the participant and set its own java_package / java_outer_classname there; the
+// package stays "twopc" because it is part of the service name on the wire (twopc.TwoPhaseParticipant).
+//
+// The rules the team agreed on 22 Nov:
+//  - every request carries a transaction id; Prepare also carries the operation name and its payload;
+//    an id used again with different data is rejected;
+//  - Prepare validates and durably prepares the changes WITHOUT making them visible;
+//  - Commit applies what was prepared and Rollback discards it; repeating either call gives the same answer;
+//  - a participant keeps the state of a transaction across restarts, refuses contradictory decisions (Commit
+//    after Rollback and the reverse) and never rolls a prepared transaction back on its own because time passed;
+//  - Status lets the coordinator recover after a failure.
+syntax = "proto3";
+
+package twopc;
+
+option java_multiple_files = true;
+option java_package = "md.utm.faf.pad.<service>.grpc.twopc";
+option java_outer_classname = "TwoPhaseCommitProto";
+
+service TwoPhaseParticipant {
+
+  // Phase 1. Returns OUTCOME_PREPARED when the changes are validated and safely stored but not visible, or
+  // OUTCOME_REJECTED (with a reason) when this participant cannot do its part - nothing was prepared then.
+  // Asking again with the same id and the same data gives the same answer. output_json carries what the next
+  // participant of the workflow needs from this one (empty when nothing is needed).
+  rpc Prepare (PrepareRequest) returns (PrepareResponse);
+
+  // Phase 2, the decision was commit. Answers STATE_COMMITTED, also when it was already committed.
+  // FAILED_PRECONDITION if the transaction was rolled back, or was never prepared here.
+  rpc Commit (DecisionRequest) returns (DecisionResponse);
+
+  // Phase 2, the decision was abort. Answers STATE_ABORTED, also when it was already aborted or never seen
+  // (a Prepare that arrives later is then refused). FAILED_PRECONDITION if the transaction was committed.
+  rpc Rollback (DecisionRequest) returns (DecisionResponse);
+
+  // What this participant knows about a transaction, for the coordinator's recovery.
+  rpc Status (StatusRequest) returns (StatusResponse);
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  OUTCOME_PREPARED = 1;
+  OUTCOME_REJECTED = 2;
+}
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  STATE_UNKNOWN = 1;    // this participant never saw the transaction
+  STATE_PREPARED = 2;
+  STATE_COMMITTED = 3;
+  STATE_ABORTED = 4;
+}
+
+message PrepareRequest {
+  string transaction_id = 1;  // at most 64 characters, the coordinator's UUID
+  string operation = 2;       // the workflow, e.g. "create_applicant"
+  string payload_json = 3;    // the input of this participant's part, a JSON object in snake_case
+}
+
+message PrepareResponse {
+  Outcome outcome = 1;
+  string reason = 2;       // why it was rejected
+  string output_json = 3;  // what the next participant needs, a JSON object in snake_case, or empty
+}
+
+message DecisionRequest {
+  string transaction_id = 1;
+}
+
+message DecisionResponse {
+  State state = 1;
+}
+
+message StatusRequest {
+  string transaction_id = 1;
+}
+
+message StatusResponse {
+  State state = 1;
+}
