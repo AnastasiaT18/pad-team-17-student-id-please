@@ -265,6 +265,16 @@ the current session.
 
 Arrows point from the service that initiates a call to the service it calls.
 
+What Lab 5 added is in green. Every service database is now a PostgreSQL cluster - a primary and two
+asynchronous standbys, drawn as stacked cylinders - with scripted manual failover. The **application
+cache** is Redis split into two shards (`cache-1`, `cache-2`) by consistent hashing; the Gateway keeps
+verified JWTs in it and Server Rules keeps its rule sets, keyed by version. The **analytics ETL**
+reads the eight service databases with a read-only `analytics_reader` account every five minutes and
+loads them into the **data warehouse**, a separate PostgreSQL database with its own schema. In purple
+are two components that have been in the system since Lab 3 and were missing from the earlier
+diagrams: the **Traefik** proxy that keeps a browser's Socket.IO connection on one Discord DMs
+replica, and the **Redis** that links the replicas of Discord DMs.
+
 What Lab 4 added is in blue. The Gateway now only checks the JWT and lets through the public
 routes; every request goes on to the **Message Broker**, which sends it to the least loaded healthy
 instance of the service, protects every instance with a circuit breaker, and reroutes the request
