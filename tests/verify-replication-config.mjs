@@ -50,6 +50,33 @@ for (const [database, app, volume] of [
     assert.ok(url.includes(name));
   }
 }
+// Applicant and Credential: new PostgreSQL 18 primary volume, two standbys, multi-host JDBC URL through Spring.
+for (const [pair, app] of [['applicant', 'applicant-service'], ['credential', 'credential-service']]) {
+  const database = `${pair}-db`;
+  const url = merged.services[app].environment.SPRING_DATASOURCE_URL;
+  assert.ok(url.includes('targetServerType=primary'));
+  assert.equal(merged.services[app].deploy.replicas, 2);
+  assert.deepEqual(merged.services[app].depends_on, base.services[app].depends_on);
+  for (const [key, value] of Object.entries(base.services[app].environment)) {
+    assert.equal(merged.services[app].environment[key], value, `${app}.${key} changed`);
+  }
+  assert.equal(merged.services[database].image, 'postgres:18');
+  assert.equal(merged.services[database].environment.NODE_MODE, 'primary');
+  assert.ok(merged.services[database].volumes.some(v => v.source === `${pair}-db-primary` && v.target === '/var/lib/postgresql'));
+  assert.ok(!merged.services[database].volumes.some(v => v.source === `${pair}-db-data`), 'the legacy PostgreSQL 16 volume must not be mounted');
+  assert.ok(merged.services[database].command.includes('synchronous_standby_names='));
+  assert.ok(url.includes(`${database}:5432`));
+  for (const suffix of ['-standby-1', '-standby-2']) {
+    const name = database + suffix;
+    assert.equal(merged.services[name].image, 'postgres:18');
+    assert.equal(merged.services[name].environment.NODE_MODE, 'standby');
+    assert.equal(merged.services[name].environment.REPLICATION_UPSTREAM, database);
+    assert.equal(merged.services[name].restart, 'no');
+    assert.equal((merged.services[name].ports ?? []).length, 0);
+    assert.ok(url.includes(name));
+    assert.ok(merged.services[name].volumes.some(v => v.target === '/var/lib/postgresql' && v.source !== `${pair}-db-primary`));
+  }
+}
 for (const pair of ['moderation', 'discord-dms']) {
   assert.deepEqual(merged.services[`${pair}-db`].profiles, ['legacy-databases']);
   assert.equal(merged.services[`${pair}-service`].environment.DB_HOST, `${pair}-db-router`);
@@ -63,8 +90,13 @@ for (const service of ['analytics-scheduler', 'analytics-etl']) {
   assert.ok(values.MODERATION_DSN.includes('moderation-db-router'));
   assert.ok(values.DISCORD_DSN.includes('discord-dms-db-router'));
   for (const key of ['RULES_DSN', 'RECORD_DSN']) assert.ok(values[key].includes('target_session_attrs=read-write'));
+  for (const [key, pair] of [['APPLICANT_DSN', 'applicant'], ['CREDENTIAL_DSN', 'credential']]) {
+    // "primary": the read-only reader role would make libpq reject every node with "read-write"
+    assert.ok(values[key].includes('target_session_attrs=primary'));
+    for (const node of [`${pair}-db`, `${pair}-db-standby-1`, `${pair}-db-standby-2`]) assert.ok(values[key].includes(`${node}:5432`));
+  }
   for (const [key, value] of Object.entries(base.services[service].environment)) {
-    if (!['MODERATION_DSN', 'DISCORD_DSN', 'RULES_DSN', 'RECORD_DSN', 'PLAYER_DSN', 'SESSION_DSN'].includes(key)) assert.equal(values[key], value);
+    if (!['MODERATION_DSN', 'DISCORD_DSN', 'RULES_DSN', 'RECORD_DSN', 'PLAYER_DSN', 'SESSION_DSN', 'APPLICANT_DSN', 'CREDENTIAL_DSN'].includes(key)) assert.equal(values[key], value);
   }
   assert.ok(merged.services[service].depends_on['moderation-db-router']);
   assert.ok(merged.services[service].depends_on['discord-dms-db-router']);
@@ -104,4 +136,4 @@ for (const [pair, app, legacyDb, dsn] of playerSessionClusters) {
     assert.ok(!analytics.depends_on[legacyDb]);
   }
 }
-console.log('PASS: all six replication clusters, app dependencies and ETL routing');
+console.log('PASS: all eight replication clusters, app dependencies and ETL routing');
