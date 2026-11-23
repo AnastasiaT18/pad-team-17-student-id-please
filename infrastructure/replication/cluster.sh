@@ -7,8 +7,12 @@ CLUSTER=${1:-}; [[ $# == 0 ]] || shift
 case "$CLUSTER" in
   rules) INITIAL_PRIMARY=server-rules-db; APP=server-rules-service; VOLUME=server-rules-db-data; DSN_KEY=RULES_DSN ;;
   record) INITIAL_PRIMARY=university-record-db; APP=university-record-service; VOLUME=university-record-db-data; DSN_KEY=RECORD_DSN ;;
-  *) echo 'Usage: bash infrastructure/replication/cluster.sh {rules|record} COMMAND' >&2; exit 1 ;;
+  # Applicant and Credential ran on PostgreSQL 16 (alpine): their data moves to a new PG18 primary by dump and restore.
+  applicant) INITIAL_PRIMARY=applicant-db; APP=applicant-service; VOLUME=applicant-db-data; DSN_KEY=APPLICANT_DSN; LEGACY16=1 ;;
+  credential) INITIAL_PRIMARY=credential-db; APP=credential-service; VOLUME=credential-db-data; DSN_KEY=CREDENTIAL_DSN; LEGACY16=1 ;;
+  *) echo 'Usage: bash infrastructure/replication/cluster.sh {rules|record|applicant|credential} COMMAND' >&2; exit 1 ;;
 esac
+LEGACY16=${LEGACY16:-}
 command -v jq >/dev/null || { echo 'jq is required' >&2; exit 1; }
 COMPOSE=(docker compose --project-directory "$ROOT")
 envfile=${CPR_HA_ENV_FILE:-${CPR_ENV_FILE:-}}
@@ -45,7 +49,8 @@ dc() {
 
 sql() {
   node "$1"
-  HA_COMMAND_TIMEOUT=15 dc exec -T "$1" sh -c \
+  # A node that does not answer in time counts as unavailable. Raise HA_SQL_TIMEOUT on a heavily loaded machine.
+  HA_COMMAND_TIMEOUT=${HA_SQL_TIMEOUT:-15} dc exec -T "$1" sh -c \
     'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -v ON_ERROR_STOP=1 -A -t -F "|"'
 }
 query() { printf '%s\n' "$2" | sql "$1"; }
@@ -176,7 +181,8 @@ status() {
 analytics_ready() {
   local dsn scheduler live
   dsn=$(dc config --format json | jq -r --arg k "$DSN_KEY" '.services["analytics-scheduler"].environment[$k]')
-  [[ "$dsn" == *"$INITIAL_PRIMARY-standby-1"* && "$dsn" == *"$INITIAL_PRIMARY-standby-2"* && "$dsn" == *target_session_attrs=read-write* ]] || die "Update the analytics HA DSN for $CLUSTER using .env.example first"
+  # The reader role is read-only by default, so libpq's "read-write" would reject every node: "primary" asks only for a node that is not a standby.
+  [[ "$dsn" == *"$INITIAL_PRIMARY-standby-1"* && "$dsn" == *"$INITIAL_PRIMARY-standby-2"* && ( "$dsn" == *target_session_attrs=primary* || "$dsn" == *target_session_attrs=read-write* ) ]] || die "Update the analytics HA DSN for $CLUSTER using .env.example first"
   scheduler=$(dc ps -q analytics-scheduler)
   if [[ -n "$scheduler" ]]; then
     live=$(docker inspect "$scheduler" | jq -r --arg k "$DSN_KEY" '.[0].Config.Env[] | select(startswith($k + "="))')
@@ -186,6 +192,7 @@ analytics_ready() {
 
 prepare() {
   local version backup volume system
+  if [[ -n "$LEGACY16" ]]; then prepare_legacy; return; fi
   [[ "$(primary)" == "$INITIAL_PRIMARY" ]] || die 'Prepare requires the original primary to be running'
   version=$(query "$INITIAL_PRIMARY" 'SHOW server_version_num;')
   [[ "$version" == 18* ]] || die 'Existing database must be PostgreSQL 18'
@@ -207,8 +214,77 @@ prepare() {
   echo "Backup archive readable; original volume retained. Prepared backup: $backup"
 }
 
+# ---- Applicant and Credential: move a running PostgreSQL 16 database into the new replicated cluster ----
+# Dumps the database and its roles (the analytics reader keeps its password and column grants) into $1.
+dump_legacy() {
+  dc exec -T "$INITIAL_PRIMARY" sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_dump -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$1/database.dump.partial"
+  dc exec -T "$INITIAL_PRIMARY" pg_restore --list < "$1/database.dump.partial" > /dev/null
+  mv "$1/database.dump.partial" "$1/database.dump"
+  dc exec -T "$INITIAL_PRIMARY" sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_dumpall -h 127.0.0.1 -U "$POSTGRES_USER" --roles-only' > "$1/roles.sql"
+  chmod 600 "$1/database.dump" "$1/roles.sql"
+}
+# One line per public table: name=row count. Comparing it before and after the move proves nothing was lost.
+fingerprint() {
+  query "$1" "SELECT c.relname || '=' || (xpath('/row/n/text()', query_to_xml(format('SELECT count(*) AS n FROM %I', c.relname), false, true, '')))[1]::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY 1;"
+}
+legacy_running() {
+  [[ "$(primary 2>/dev/null)" == "$INITIAL_PRIMARY" && "$(query "$INITIAL_PRIMARY" 'SHOW server_version_num;' 2>/dev/null)" == 16* ]]
+}
+legacy_volume() { docker volume inspect "${PROJECT}_${VOLUME}" >/dev/null 2>&1; }
+prepare_legacy() {
+  local backup system
+  legacy_running || die 'Prepare needs the running PostgreSQL 16 database of this service (applicant-db / credential-db) from the original deployment'
+  system=$(query "$INITIAL_PRIMARY" 'SELECT system_identifier FROM pg_control_system();')
+  backup="$ROOT/infrastructure/backups/$PROJECT-$CLUSTER-$(date +%Y%m%d%H%M%S)-$$"
+  (umask 077; mkdir -p "$backup")
+  dump_legacy "$backup"
+  fingerprint "$INITIAL_PRIMARY" > "$backup/fingerprint.txt"
+  printf '%s\n%s\n%s\n' "${PROJECT}_${VOLUME}" "$system" "$backup" > "$ROOT/.replication-state/$PROJECT-$CLUSTER.prepared"
+  echo "Backup archive readable; the PostgreSQL 16 volume stays as it is. Prepared backup: $backup"
+  echo "Rows per table now: $(paste -sd' ' "$backup/fingerprint.txt")"
+}
+enable_legacy() {
+  local receipt backup before after
+  receipt="$ROOT/.replication-state/$PROJECT-$CLUSTER.prepared"
+  [[ -f "$receipt" ]] || die 'Existing PostgreSQL 16 data detected. Run prepare first, so a backup is retained.'
+  legacy_running || die 'Start the original PostgreSQL 16 database first: the data is moved from the running database, not from its volume.'
+  analytics_ready
+  # Writers off, then the final dump: nothing written after it can be missed.
+  dc stop "$APP"
+  before=$(fingerprint "$INITIAL_PRIMARY")
+  backup="$ROOT/infrastructure/backups/$PROJECT-$CLUSTER-final-$(date +%Y%m%d%H%M%S)-$$"
+  (umask 077; mkdir -p "$backup")
+  dump_legacy "$backup"
+  printf '%s\n' "$before" > "$backup/fingerprint.txt"
+  dc stop "$INITIAL_PRIMARY"
+  # Recreated from the overlay: an empty PostgreSQL 18 primary on its own new volume. The legacy volume is not mounted.
+  dc up -d --no-deps --wait "$INITIAL_PRIMARY"
+  [[ "$(primary)" == "$INITIAL_PRIMARY" ]] || die 'The new primary did not start; the legacy volume is untouched.'
+  dc exec -T "$INITIAL_PRIMARY" sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec psql -h 127.0.0.1 -U "$POSTGRES_USER" -d postgres -X -q' < "$backup/roles.sql" > /dev/null 2>&1 || true
+  dc exec -T "$INITIAL_PRIMARY" sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; exec pg_restore -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --exit-on-error' < "$backup/database.dump" \
+    || die "Restore failed; the legacy volume is untouched. Final backup: $backup"
+  after=$(fingerprint "$INITIAL_PRIMARY")
+  [[ "$before" == "$after" ]] || die "Restored row counts differ from the original; the legacy volume is untouched. Final backup: $backup"
+  [[ -n "$before" ]] || die "The original database reports no tables; refusing to continue. Final backup: $backup"
+  echo "Rows per table, original = restored: $(printf '%s' "$after" | tr '\n' ' ')"
+  # The standbys copy the primary when they first start, so they start after the restore.
+  dc up -d --no-deps --wait "${NODES[1]}" "${NODES[2]}"
+  dc up -d --no-deps "$APP"
+  echo "Enabled. Final backup retained: $backup"
+  echo 'Check both application replicas in Discovery before sending traffic.'
+}
+
 enable() {
   local n s volume receipt control expected backup
+  if [[ -n "$LEGACY16" ]]; then
+    if legacy_volume; then enable_legacy; return; fi
+    analytics_ready
+    dc up -d --no-deps --wait "$INITIAL_PRIMARY"
+    dc up -d --no-deps --wait "${NODES[1]}" "${NODES[2]}"
+    dc up -d --no-deps "$APP"
+    echo 'Enabled a new, empty cluster: the application creates its schema on first start.'
+    return
+  fi
   analytics_ready
   for n in "${NODES[@]}"; do
     s=$(state "$n") || continue
@@ -250,8 +326,8 @@ else
 fi
 command=${1:-}; [[ $# == 0 ]] || shift
 case "$command" in
-  prepare) [[ $# == 0 ]] || die 'Usage: cluster.sh {rules|record} prepare'; prepare ;;
-  enable) [[ $# == 0 ]] || die 'Usage: cluster.sh {rules|record} enable'; enable ;;
+  prepare) [[ $# == 0 ]] || die 'Usage: cluster.sh {rules|record|applicant|credential} prepare'; prepare ;;
+  enable) [[ $# == 0 ]] || die 'Usage: cluster.sh {rules|record|applicant|credential} enable'; enable ;;
   status) [[ $# == 0 ]] || die 'Usage: cluster.sh status'; status ;;
   stop) [[ $# == 0 ]] || die 'Usage: cluster.sh stop'; dc stop "$APP" "${NODES[@]}" ;;
   failover)
@@ -264,5 +340,5 @@ case "$command" in
   primary) [[ $# == 0 ]] || die 'Usage: cluster.sh primary'; primary ;;
   inspect) [[ $# == 1 ]] || die 'Usage: cluster.sh inspect NODE'; node "$1"; inspect "$1" ;;
   compose) dc "$@" ;;
-  *) die 'Usage: bash infrastructure/replication/cluster.sh {rules|record} {prepare|enable|status|failover|rejoin|stop}' ;;
+  *) die 'Usage: bash infrastructure/replication/cluster.sh {rules|record|applicant|credential} {prepare|enable|status|failover|rejoin|stop}' ;;
 esac
