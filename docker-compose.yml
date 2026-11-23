@@ -240,6 +240,7 @@ services:
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
       BROKER_URL: http://message-broker:8000
+      BROKER_GATEWAY_TOKEN: ${BROKER_GATEWAY_TOKEN:-}
       CACHE_REDIS_URL: redis://application-cache:6379/0
       CACHE_REDIS_SHARDS: ${CACHE_REDIS_SHARDS:-}
       AUTH_CACHE_TTL_SECONDS: ${AUTH_CACHE_TTL_SECONDS:-60}
@@ -256,6 +257,12 @@ services:
     environment:
       DISCOVERY_URL: http://discovery-service:8000
       EVENT_DB_PATH: /data/events.db
+      BROKER_END_SHIFT_2PC_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      BROKER_GATEWAY_TOKEN: ${BROKER_GATEWAY_TOKEN:-}
+      # Pass through the map from .env; an unset key uses the Broker's empty default.
+      BROKER_TRANSACTION_ADDRESSES:
+      PLAYER_SERVICE_TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
+      SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
     volumes:
       - message-broker-data:/data
     healthcheck:
@@ -303,6 +310,8 @@ services:
       PORT: 3000
       GRPC_PORT: 9090
       SERVICE_NAME: player-service
+      TRANSACTIONS_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       LOG_DIR: /logs
     volumes:
@@ -329,6 +338,8 @@ services:
       PORT: 3001
       GRPC_PORT: 9090
       SERVICE_NAME: server-moderation-session-service
+      TRANSACTIONS_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       BROKER_GRPC_URL: message-broker:9090
       BROKER_PUBLISH_TIMEOUT_MS: 1500
