@@ -198,6 +198,18 @@ Gateway authentication caching. See [setup, architecture and verification](docs/
 This infrastructure alone does not enable caching: the cache clients, metrics and tests will
 arrive in separate Server Rules and Gateway changes, followed by image releases.
 
+## Two-phase commit (Lab 5, Grade 8)
+
+For a workflow that changes several databases, a coordinator in the Message Broker asks each service to
+*prepare* its part, and only when all of them are prepared tells them to *commit*; otherwise it tells them to
+*roll back*. Applicant and Credential (4.2.0) are participants in "create an applicant"
+(`applicant.initialize.v1`, `credential.initialize.v1`): `Prepare`, `Commit`, `Rollback` and `Status` over gRPC
+on port 9091, behind a token, with the Message Broker's contract
+([`proto/transactions.proto`](proto/transactions.proto)) and the prepared state kept in the service's own
+database, so it survives a restart. See
+[the contract and what each participant does](docs/two-phase-commit.md); the live check is
+`bash tests/verify-two-phase-participants.sh`.
+
 ## Service Boundaries
 
 ### Player Service
