@@ -216,6 +216,16 @@ database, so it survives a restart. See
 [the contract and what each participant does](docs/two-phase-commit.md); the live check is
 `bash tests/verify-two-phase-participants.sh`.
 
+## Long-running saga (Lab 5, Grade 9)
+
+"Create an applicant" is also a saga, with its coordinator in the Message Broker: Applicant and Credential
+*execute* their step and commit it at once, and if a later step fails the coordinator *compensates* the earlier ones
+in reverse order (deleting what was created); University Record is the last step, an event that the Broker's
+queue delivers until it is accepted. Nothing is held between the steps, unlike two-phase commit. The participants
+serve `pad.saga.v1.SagaParticipant` ([`proto/saga.proto`](proto/saga.proto)) on the same port 9091 and token. See
+[the flow, the contract and the coordinator's rules](docs/saga.md); the live check of the participants is
+`bash tests/verify-saga-participants.sh`.
+
 ## Service Boundaries
 
 ### Player Service
