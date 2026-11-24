@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package pad.saga.v1;
+
+// Long-running saga participant. Unlike two-phase commit, nothing is held between the calls: Execute commits
+// the step in the participant's own database at once, and Compensate undoes it later if a later step fails.
+// Both calls are idempotent for the same (saga_id, operation) and carry the token in the
+// "x-transaction-token" metadata, like pad.transactions.v1, on the same internal port.
+service SagaParticipant {
+  rpc Execute(SagaStepRequest) returns (SagaStepReply);
+  rpc Compensate(SagaStepRequest) returns (SagaStepReply);
+}
+
+message SagaStepRequest {
+  string saga_id = 1;
+  string operation = 2;
+  // Compact JSON object. Required by Execute; Compensate may send an empty string because the participant
+  // finds the step it has to undo by (saga_id, operation).
+  string payload_json = 3;
+}
+
+// state is one of DONE, FAILED, COMPENSATED, UNKNOWN:
+//   Execute    -> DONE (result_json holds the step result), FAILED ({"reason": ...}, nothing was changed)
+//                 or COMPENSATED (the saga was already compensated, nothing is executed any more).
+//   Compensate -> COMPENSATED (also when the step never ran or failed: a tombstone stops a late Execute).
+//   UNKNOWN is only used for an operation this participant does not implement.
+message SagaStepReply {
+  string saga_id = 1;
+  string state = 2;
+  string result_json = 3;
+}
