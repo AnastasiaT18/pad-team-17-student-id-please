@@ -116,6 +116,12 @@ Player and Server Moderation Session use the same overlay with their own
 PostgreSQL 17 clusters. See the [Player and Session runbook](docs/player-session-replication.md)
 for setup, cutover, and failover.
 
+Applicant and Credential use the same overlay with their own PostgreSQL 18 clusters (one primary and
+two asynchronous standbys each, manual failover with fencing). Their data moves from the original
+PostgreSQL 16 databases by dump and restore, with every table's row count compared. See the
+[Applicant and Credential runbook](docs/applicant-credential-replication.md); the live check is
+`bash tests/verify-applicant-credential-replication.sh`.
+
 ### Monitoring: Prometheus, Loki and Grafana (Lab 4)
 
 Grade 10. `docker compose up -d` also starts the monitoring; nothing else is needed.

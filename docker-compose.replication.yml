@@ -1,5 +1,7 @@
-# Shared Grade 5 overlay for six private databases. Each owner keeps their own cutover tooling.
+# Shared Grade 5 overlay for the eight private databases. Each owner keeps their own cutover tooling.
 # Rules/Records retain PG18 primary volumes; Moderation/Discord use prepared routers/new clusters.
+# Applicant/Credential move from PostgreSQL 16 to new PG18 primary volumes (dump and restore, see
+# docs/applicant-credential-replication.md); their legacy volumes stay untouched for rollback.
 x-ha: &ha
   image: postgres:18
   entrypoint: ["sh", "/opt/pad17-ha/start.sh"]
@@ -26,6 +28,20 @@ x-record-env: &record-env
   POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
   POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
   REPLICATION_PASSWORD: ${UNIVERSITY_RECORD_REPLICATION_PASSWORD:?Set UNIVERSITY_RECORD_REPLICATION_PASSWORD}
+  PGDATA: /var/lib/postgresql/18/docker
+
+x-applicant-env: &applicant-env
+  POSTGRES_DB: applicant
+  POSTGRES_USER: ${APPLICANT_DB_USER}
+  POSTGRES_PASSWORD: ${APPLICANT_DB_PASSWORD}
+  REPLICATION_PASSWORD: ${APPLICANT_REPLICATION_PASSWORD:?Set APPLICANT_REPLICATION_PASSWORD}
+  PGDATA: /var/lib/postgresql/18/docker
+
+x-credential-env: &credential-env
+  POSTGRES_DB: credential
+  POSTGRES_USER: ${CREDENTIAL_DB_USER}
+  POSTGRES_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+  REPLICATION_PASSWORD: ${CREDENTIAL_REPLICATION_PASSWORD:?Set CREDENTIAL_REPLICATION_PASSWORD}
   PGDATA: /var/lib/postgresql/18/docker
 
 x-player-session-db: &player-session-db
@@ -140,6 +156,96 @@ services:
   university-record-service:
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432,university-record-db-standby-1:5432,university-record-db-standby-2:5432/record_db?targetServerType=primary&hostRecheckSeconds=1&connectTimeout=2&socketTimeout=5&tcpKeepAlive=true
+
+  applicant-db:
+    <<: *ha
+    environment: !override
+      <<: *applicant-env
+      NODE_MODE: primary
+      NODE_NAME: applicant-db
+    # A NEW volume: the legacy PostgreSQL 16 volume applicant-db-data is not mounted and stays as it is.
+    volumes: !override
+      - applicant-db-primary:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+      - ./infrastructure/replication/postgres/init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+
+  applicant-db-standby-1:
+    <<: *ha
+    environment:
+      <<: *applicant-env
+      NODE_MODE: standby
+      NODE_NAME: applicant-db-standby-1
+      REPLICATION_UPSTREAM: applicant-db
+    volumes:
+      - applicant-standby-1-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      applicant-db:
+        condition: service_healthy
+
+  applicant-db-standby-2:
+    <<: *ha
+    environment:
+      <<: *applicant-env
+      NODE_MODE: standby
+      NODE_NAME: applicant-db-standby-2
+      REPLICATION_UPSTREAM: applicant-db
+    volumes:
+      - applicant-standby-2-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      applicant-db:
+        condition: service_healthy
+
+  credential-db:
+    <<: *ha
+    environment: !override
+      <<: *credential-env
+      NODE_MODE: primary
+      NODE_NAME: credential-db
+    # A NEW volume: the legacy PostgreSQL 16 volume credential-db-data is not mounted and stays as it is.
+    volumes: !override
+      - credential-db-primary:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+      - ./infrastructure/replication/postgres/init.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+
+  credential-db-standby-1:
+    <<: *ha
+    environment:
+      <<: *credential-env
+      NODE_MODE: standby
+      NODE_NAME: credential-db-standby-1
+      REPLICATION_UPSTREAM: credential-db
+    volumes:
+      - credential-standby-1-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      credential-db:
+        condition: service_healthy
+
+  credential-db-standby-2:
+    <<: *ha
+    environment:
+      <<: *credential-env
+      NODE_MODE: standby
+      NODE_NAME: credential-db-standby-2
+      REPLICATION_UPSTREAM: credential-db
+    volumes:
+      - credential-standby-2-data:/var/lib/postgresql
+      - ./infrastructure/replication/postgres:/opt/pad17-ha:ro
+    depends_on:
+      credential-db:
+        condition: service_healthy
+
+  # Spring reads SPRING_DATASOURCE_URL before spring.datasource.url, so only this value changes: the JDBC
+  # driver tries the three nodes and keeps the one that is writable (targetServerType=primary).
+  applicant-service:
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://applicant-db:5432,applicant-db-standby-1:5432,applicant-db-standby-2:5432/applicant?targetServerType=primary&hostRecheckSeconds=1&connectTimeout=2&socketTimeout=5&tcpKeepAlive=true
+
+  credential-service:
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://credential-db:5432,credential-db-standby-1:5432,credential-db-standby-2:5432/credential?targetServerType=primary&hostRecheckSeconds=1&connectTimeout=2&socketTimeout=5&tcpKeepAlive=true
 
   moderation-db:
     profiles: [legacy-databases]
@@ -431,6 +537,8 @@ services:
     environment:
       PLAYER_DSN: ${CPR_ANALYTICS_PLAYER_DSN:-${ANALYTICS_PLAYER_DSN}}
       SESSION_DSN: ${CPR_ANALYTICS_SESSION_DSN:-${ANALYTICS_SESSION_DSN}}
+      APPLICANT_DSN: ${ANALYTICS_APPLICANT_HA_DSN:?Set ANALYTICS_APPLICANT_HA_DSN}
+      CREDENTIAL_DSN: ${ANALYTICS_CREDENTIAL_HA_DSN:?Set ANALYTICS_CREDENTIAL_HA_DSN}
       RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
       RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
       MODERATION_DSN: ${CPR_ANALYTICS_MODERATION_DSN:-${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}}
@@ -456,6 +564,8 @@ services:
     environment:
       PLAYER_DSN: ${CPR_ANALYTICS_PLAYER_DSN:-${ANALYTICS_PLAYER_DSN}}
       SESSION_DSN: ${CPR_ANALYTICS_SESSION_DSN:-${ANALYTICS_SESSION_DSN}}
+      APPLICANT_DSN: ${ANALYTICS_APPLICANT_HA_DSN:?Set ANALYTICS_APPLICANT_HA_DSN}
+      CREDENTIAL_DSN: ${ANALYTICS_CREDENTIAL_HA_DSN:?Set ANALYTICS_CREDENTIAL_HA_DSN}
       RULES_DSN: ${ANALYTICS_RULES_HA_DSN:?Set ANALYTICS_RULES_HA_DSN}
       RECORD_DSN: ${ANALYTICS_RECORD_HA_DSN:?Set ANALYTICS_RECORD_HA_DSN}
       MODERATION_DSN: ${CPR_ANALYTICS_MODERATION_DSN:-${ANALYTICS_MODERATION_REPLICATION_DSN:?Set the reader DSN using moderation-db-router}}
@@ -477,6 +587,12 @@ services:
         condition: service_healthy
 
 volumes:
+  applicant-db-primary:
+  applicant-standby-1-data:
+  applicant-standby-2-data:
+  credential-db-primary:
+  credential-standby-1-data:
+  credential-standby-2-data:
   server-rules-standby-1-data:
   server-rules-standby-2-data:
   university-record-standby-1-data:
