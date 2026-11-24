@@ -116,6 +116,28 @@ Player and Server Moderation Session use the same overlay with their own
 PostgreSQL 17 clusters. See the [Player and Session runbook](docs/player-session-replication.md)
 for setup, cutover, and failover.
 
+### End-shift two-phase commit (Lab 5, Grade 8)
+
+In `.env`, select images that include 2PC using `GATEWAY_VERSION`,
+`BROKER_VERSION`, `PLAYER_VERSION` and `SERVER_MODERATION_SESSION_VERSION`.
+Set the internal addresses and enable the workflow:
+
+```dotenv
+END_SHIFT_2PC_ENABLED=true
+BROKER_TRANSACTION_ADDRESSES='{"player-service":"player-service:9091","server-moderation-session-service":"server-moderation-session-service:9091"}'
+```
+
+Set three distinct random secrets in `.env` using at least 32 printable
+non-space ASCII characters without commas. `BROKER_GATEWAY_TOKEN` is shared by
+Gateway and Broker. `PLAYER_SERVICE_TRANSACTION_TOKEN` and
+`SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN` each match Broker with the
+respective participant. Compose passes these values to the correct services.
+
+Clients still end a shift through Gateway at `POST /sessions/{id}/end`. A
+successful response means the shift closed and Player applied its results.
+Retry that request if the Broker returns `SHIFT_END_PENDING`. The participant
+listeners use the internal Docker network on port `9091`. The same settings
+work with the replication overlay.
 Applicant and Credential use the same overlay with their own PostgreSQL 18 clusters (one primary and
 two asynchronous standbys each, manual failover with fencing). Their data moves from the original
 PostgreSQL 16 databases by dump and restore, with every table's row count compared. See the
