@@ -194,25 +194,29 @@ Analytics source is tracked separately in `services/analytics`, pinned to the
 released commit; Compose continues to run the published image.
 
 Provision the dedicated reader accounts and configure the analytics environment
-variables before starting the scheduler. The initial Docker Hub release must be
-published before the new image can be pulled. No private-source checkout is needed.
+variables before starting the scheduler. The image is the public
+`dannacojocari/pad-team-17-analytics:v0.1.0`; no private-source checkout is needed.
 
 ## Application cache (Lab 5, Grade 6)
 
-Compose provisions `application-cache`, a dedicated internal Redis instance for Rules and
-Gateway authentication caching. See [setup, architecture and verification](docs/lab5-cache.md).
-This infrastructure alone does not enable caching: the cache clients, metrics and tests will
-arrive in separate Server Rules and Gateway changes, followed by image releases.
+Compose provisions `application-cache`, a dedicated internal Redis instance. The Gateway (0.5.0)
+keeps verified JWTs in it and Server Rules (v0.5.0) keeps its rule sets there, keyed by version.
+See [setup, architecture and verification](docs/lab5-cache.md).
+
+Sharding by consistent hashing is opt-in: start the `cache-sharding` profile (a second Redis,
+`application-cache-2`) and set `CACHE_REDIS_SHARDS` as shown in `.env.example`. The Gateway's sharded
+client is merged but not yet in a published image, so the default image keeps using the single Redis.
 
 ## Two-phase commit (Lab 5, Grade 8)
 
 For a workflow that changes several databases, a coordinator in the Message Broker asks each service to
 *prepare* its part, and only when all of them are prepared tells them to *commit*; otherwise it tells them to
-*roll back*. Applicant and Credential (4.2.0) are participants in "create an applicant"
-(`applicant.initialize.v1`, `credential.initialize.v1`): `Prepare`, `Commit`, `Rollback` and `Status` over gRPC
+*roll back*. From version 4.2.0, Applicant and Credential implement the participant side for the operations
+`applicant.initialize.v1` and `credential.initialize.v1`: `Prepare`, `Commit`, `Rollback` and `Status` over gRPC
 on port 9091, behind a token, with the Message Broker's contract
 ([`proto/transactions.proto`](proto/transactions.proto)) and the prepared state kept in the service's own
-database, so it survives a restart. See
+database, so it survives a restart. The Broker workflow that calls them to create an applicant is not wired
+yet. See
 [the contract and what each participant does](docs/two-phase-commit.md); the live check is
 `bash tests/verify-two-phase-participants.sh`.
 
@@ -295,8 +299,9 @@ Arrows point from the service that initiates a call to the service it calls.
 
 What Lab 5 added is in green. Every service database is now a PostgreSQL cluster - a primary and two
 asynchronous standbys, drawn as stacked cylinders - with scripted manual failover. The **application
-cache** is Redis split into two shards (`cache-1`, `cache-2`) by consistent hashing; the Gateway keeps
-verified JWTs in it and Server Rules keeps its rule sets, keyed by version. The **analytics ETL**
+cache** is Redis; the Gateway keeps verified JWTs in it and Server Rules keeps its rule sets, keyed by
+version. It is drawn as two shards (`cache-1`, `cache-2`) chosen by consistent hashing, which is the
+opt-in `cache-sharding` setup described under Application cache. The **analytics ETL**
 reads the eight service databases with a read-only `analytics_reader` account every five minutes and
 loads them into the **data warehouse**, a separate PostgreSQL database with its own schema. In purple
 are two components that have been in the system since Lab 3 and were missing from the earlier
