@@ -1,0 +1,22 @@
+syntax = "proto3";
+package pad.transactions.v1;
+
+// Internal only. Every call requires x-transaction-token metadata.
+service TransactionParticipant {
+  rpc Prepare (PrepareRequest) returns (TransactionReply);
+  rpc Commit (TransactionRequest) returns (TransactionReply);
+  rpc Rollback (TransactionRequest) returns (TransactionReply);
+  rpc Status (TransactionRequest) returns (TransactionReply);
+}
+message PrepareRequest {
+  string transaction_id = 1;
+  string operation = 2;
+  string payload_json = 3;
+}
+message TransactionRequest { string transaction_id = 1; }
+message TransactionReply {
+  string transaction_id = 1;
+  // UNKNOWN, PREPARED, COMMITTED or ABORTED.
+  string state = 2;
+  string result_json = 3;
+}
