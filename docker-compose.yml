@@ -252,7 +252,7 @@ services:
 
   # ---------------------------------------------------------------- message broker
   message-broker:
-    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.1.0}
+    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.2.0}
     container_name: pad17-message-broker
     environment:
       DISCOVERY_URL: http://discovery-service:8000
@@ -263,6 +263,7 @@ services:
       BROKER_TRANSACTION_ADDRESSES: ${BROKER_TRANSACTION_ADDRESSES:?Set BROKER_TRANSACTION_ADDRESSES}
       PLAYER_SERVICE_TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
       SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
+      UNIVERSITY_RECORD_SERVICE_TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
     volumes:
       - message-broker-data:/data
     healthcheck:
@@ -444,6 +445,8 @@ services:
       SERVICE_HEARTBEAT_SECONDS: 15
       SESSION_CLIENT: grpc
       SESSION_SERVICE_NAME: server-moderation-session-service
+      TRANSACTIONS_ENABLED: ${UNIVERSITY_RECORD_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:

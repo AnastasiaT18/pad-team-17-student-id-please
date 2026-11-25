@@ -2,9 +2,9 @@
 
 ## Status and architecture
 
-This branch provisions Redis and supplies environment variables to its intended clients.
-The currently selected Gateway and Server Rules images do not implement these clients yet.
-No image tags or source submodule pointers are changed by this infrastructure step.
+Compose provisions the shared application Redis. Gateway 0.5.0 uses it for verified JWTs,
+and Server Rules v0.5.0 uses it for versioned rule sets. Server Rules supports the optional
+consistent-hash shard list; Gateway sharding is not yet available in a published image.
 
 ```mermaid
 flowchart LR
@@ -12,23 +12,23 @@ flowchart LR
     Gateway --> Broker[Message Broker]
     Broker --> Rules[Server Rules: two replicas]
     Rules --> DB[(Rules PostgreSQL primary)]
-    Gateway -. planned verified JWT cache .-> Cache[(application-cache:6379)]
-    Rules -. planned shared rules cache .-> Cache
+    Gateway -->|single Redis URL| Cache[(application-cache:6379)]
+    Rules -->|single URL or configured shards| Cache
     Discord[Discord DMs: two replicas] --> Redis[(redis:6379)]
 ```
 
-The dotted connections become active after the service implementations are released.
-This diagram supplements the existing architecture diagram for the caching work; ETL,
-warehouse and replication changes remain with their respective owners.
+The application cache is independent of Discord's Socket.IO Redis. This diagram supplements
+the existing architecture diagram; ETL, warehouse and database replication are separate concerns.
 
 ## Configuration
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `CACHE_MAXMEMORY` | `128mb` | Redis data memory threshold; not a hard container RAM limit |
-| `RULES_CACHE_TTL_SECONDS` | `60` | Planned lifetime of cached rules |
-| `AUTH_CACHE_TTL_SECONDS` | `60` | Planned maximum token-cache lifetime; never beyond token expiry |
-| `CACHE_REDIS_URL` | `redis://application-cache:6379/0` | Set in Compose for Gateway and both Rules replicas |
+| `RULES_CACHE_TTL_SECONDS` | `60` | Cached rule lifetime |
+| `AUTH_CACHE_TTL_SECONDS` | `60` | Maximum token-cache lifetime; never beyond token expiry |
+| `CACHE_REDIS_URL` | `redis://application-cache:6379/0` | Single Redis URL supplied to Gateway and both Rules replicas |
+| `CACHE_REDIS_SHARDS` | *(empty)* | Optional consistent-hash shard list supported by Server Rules |
 
 Redis has no published host port. It is accessible to containers on the Compose network,
 which is treated as trusted, like the existing internal service connections. There is no
@@ -38,13 +38,14 @@ remains the source of truth and JWTs must be fully verified on authentication ca
 The `noeviction` policy prevents memory pressure from silently removing future consistency
 metadata alongside cached values. Once the threshold is reached, writes that need more
 memory fail; application clients must handle that failure and use their normal source.
-TTL expiry still removes expired entries. This policy does not implement Grade 7 sharding.
+TTL expiry still removes expired entries. Sharding changes key routing; it does not change
+Redis eviction behavior or the PostgreSQL source of truth.
 See the [Redis eviction reference](https://redis.io/docs/latest/develop/reference/eviction/).
 
-There is deliberately no mandatory `depends_on` relationship to the cache. The forthcoming
-clients must tolerate startup without Redis, use short connection/command timeouts, fall back
-on failures, and recover when Redis returns. A Redis health check diagnoses Redis itself;
-it does not prove application caching or safe fallback works.
+There is deliberately no mandatory `depends_on` relationship to the cache. Both clients
+tolerate startup without Redis, use short connection/command timeouts, fall back on failures,
+and recover when Redis returns. A Redis health check diagnoses Redis itself; it does not prove
+application caching or safe fallback works.
 
 ## Verify this infrastructure
 
@@ -86,9 +87,8 @@ Expect `+PONG`. This command requires a running Gateway container.
 
 Prometheus scrapes `gateway-service:8000/metrics` using the `gateway-service` job.
 The existing `server-rules-service` job collects rules-cache counters from both replicas.
-Deploy cache-enabled images before expecting these metrics; the older Gateway image
-returns 404 for `/metrics` and its Prometheus target will be DOWN until upgraded.
-This monitoring change does not select or publish new application images.
+Use the published cache-enabled images before expecting these metrics; verify the Gateway
+metrics endpoint against the selected image if its Prometheus target is DOWN.
 
 After updating the configuration, run from this repository:
 
@@ -116,7 +116,8 @@ panels are provisioned by this change.
 
 ### Application acceptance checks
 
-These are pending; this branch does not claim they pass:
+These end-to-end checks remain pending; focused implementation tests are maintained by the
+Gateway and Server Rules services:
 
 1. Run authenticated `GET /rules` twice through `http://localhost:8090` in Postman.
    Demonstrate a rules miss followed by a hit and no second database read. A `200` alone
@@ -132,6 +133,6 @@ These are pending; this branch does not claim they pass:
    database reads and normal JWT verification still work. Restart with
    `docker compose start application-cache` and verify caching recovers.
 
-Add the exact application metrics and Postman assertions when the corresponding services
-implement them. Redis `INFO stats` is useful for diagnostics but includes all clients and
+The application metrics assertions and Postman requests should be added to the Lab 5
+collections. Redis `INFO stats` is useful for diagnostics but includes all clients and
 metadata operations; it cannot alone prove how many database reads were avoided.

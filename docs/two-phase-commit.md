@@ -91,8 +91,8 @@ Metrics: `pad_twopc_decisions_total{operation,phase,result}` at `/actuator/prome
   `transaction_client.py`) were also run once against the two containers, outside the repository: a commit of
   Applicant then Credential, the same transaction id again, an abort because Credential could not prepare and one
   because Applicant could not - the rows were as expected each time.
-- CPR Compose has the end-shift Broker address map and Player/Session token pass-throughs configured.
-  Applicant/Credential participant settings remain with their owner. Keep Grade 8 disabled until the
-  required participant images and tokens are ready.
+- CPR Compose has the end-shift Player/Session wiring and the University Record participant address/token
+  wiring. Applicant/Credential participant settings remain with their owner. The end-shift and University
+  Record toggles stay off by default; enable each only when its matching workflow, images and tokens are ready.
 - Only "create an applicant" is implemented. The other workflows proposed for the grade (end shift and award
   progression, start a shift, submit a verdict) belong to the services that own them.

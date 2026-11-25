@@ -225,9 +225,9 @@ Compose provisions `application-cache`, a dedicated internal Redis instance. The
 keeps verified JWTs in it and Server Rules (v0.5.0) keeps its rule sets there, keyed by version.
 See [setup, architecture and verification](docs/lab5-cache.md).
 
-Sharding by consistent hashing is opt-in: start the `cache-sharding` profile (a second Redis,
-`application-cache-2`) and set `CACHE_REDIS_SHARDS` as shown in `.env.example`. The Gateway's sharded
-client is merged but not yet in a published image, so the default image keeps using the single Redis.
+Server Rules v0.5.0 supports consistent-hash sharding. It is opt-in: start the `cache-sharding`
+profile (which adds `application-cache-2`) and set `CACHE_REDIS_SHARDS` as shown in `.env.example`.
+Gateway 0.5.0 still uses the single Redis URL; its sharded client is not yet in a published image.
 
 ## Two-phase commit (Lab 5, Grade 8)
 
@@ -237,8 +237,10 @@ For a workflow that changes several databases, a coordinator in the Message Brok
 `applicant.initialize.v1` and `credential.initialize.v1`: `Prepare`, `Commit`, `Rollback` and `Status` over gRPC
 on port 9091, behind a token, with the Message Broker's contract
 ([`proto/transactions.proto`](proto/transactions.proto)) and the prepared state kept in the service's own
-database, so it survives a restart. The Broker workflow that calls them to create an applicant is not wired
-yet. See
+database, so it survives a restart. University Record v0.5.0 also implements
+`university-record.initialize-applicant.v1` on its internal port 9091; CPR passes its token and address through
+with `UNIVERSITY_RECORD_2PC_ENABLED=false` by default. The Broker workflow that calls these participants to
+create an applicant is not wired yet. See
 [the contract and what each participant does](docs/two-phase-commit.md); the live check is
 `bash tests/verify-two-phase-participants.sh`.
 
