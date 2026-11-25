@@ -325,7 +325,13 @@ cache** is Redis; the Gateway keeps verified JWTs in it and Server Rules keeps i
 version. It is drawn as two shards (`cache-1`, `cache-2`) chosen by consistent hashing, which is the
 opt-in `cache-sharding` setup described under Application cache. The **analytics ETL**
 reads the eight service databases with a read-only `analytics_reader` account every five minutes and
-loads them into the **data warehouse**, a separate PostgreSQL database with its own schema. In purple
+loads them into the **data warehouse**, a separate PostgreSQL database with its own schema. The
+**transaction coordinators** run inside the Message Broker and keep their state in its SQLite log:
+two-phase commit ends a shift in Server Moderation Session and Player together, and the create-applicant
+saga creates the applicant in Applicant and Credential and compensates them in reverse order if a step
+fails, then tells University Record with an event. They call the services over gRPC on the internal
+port 9091; the Gateway marks the two requests they coordinate, `POST /sessions/{id}/end` and
+`POST /applicants`, with its `X-Gateway-Token`. In purple
 are two components that have been in the system since Lab 3 and were missing from the earlier
 diagrams: the **Traefik** proxy that keeps a browser's Socket.IO connection on one Discord DMs
 replica, and the **Redis** that links the replicas of Discord DMs.
