@@ -50,8 +50,8 @@ replicas. The Gateway returns this public URL when a client negotiates `GET /ws/
 The Compose defaults for Pair 4 are:
 
 ```text
-MODERATION_VERSION=v0.5.0
-DISCORD_DMS_VERSION=v0.5.0
+MODERATION_VERSION=v0.6.0
+DISCORD_DMS_VERSION=v0.6.0
 DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.2.0
 ```
 
@@ -2416,6 +2416,12 @@ The Moderation Service does not define the rules that determine whether an appli
 
 Moderation stores final decisions and pending `decision_made` events in PostgreSQL within the same transaction. Its outbox worker publishes events to the custom Message Broker over gRPC; unsuccessful publications remain pending for retry. The Message Broker is responsible for dispatching events to subscribers.
 
+The private repository also provides database migrations, asynchronous replication with
+manual failover, and an optional 2PC participant. Participant support on `dev` is separate
+from the published image and from a complete Broker-coordinated workflow. See the
+[service documentation](https://github.com/DannaCojocari/moderation-service/tree/dev) for its configuration
+and verification procedures.
+
 #### Requirements
 
 The service is built with TypeScript, NestJS, TypeORM, PostgreSQL, and gRPC integration with the custom Message Broker. For
@@ -2705,15 +2711,14 @@ No other microservice directly accesses the Moderation Service database.
 
 #### Postman Collection
 
-The CPR collection is
-[`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json).
-Set a moderator login `token`, its `player_id`, an active test `session_id`, and its current
-`applicant_id` with initialized credentials and university record. Use Gateway at
-`base_url=http://localhost:8090`. The collection checks unauthenticated/invalid submissions,
-creates one final decision, reads it, and checks duplicate/edit/delete rejection.
-It captures `decision_id`. A run submits a real verdict: use a fresh test applicant for each run.
-A successful submission does not prove that Session consumed its event or updated its score.
-Run against the updated service release; merging CPR collections does not deploy service code.
+The [CPR collection](postman/pad-team-17-moderation.postman_collection.json) runs through Gateway.
+Its setup creates fresh test players, obtains tokens, starts a session, and waits for the
+required data. Run the collection from the beginning rather than entering tokens and IDs
+manually. It covers submitting and reading a final decision, including rejection checks.
+
+Monitoring is optional. Discovery checks are in a manual folder, skipped by default.
+The collections retain test accounts and sessions for inspection. These HTTP checks do
+not establish database failover, distributed transaction completion, or Socket.IO delivery.
 
 #### Lab 3 integration notes
 
@@ -2736,6 +2741,12 @@ The Discord DMs Service manages communication between moderators and junior mode
 The service provides REST endpoints for channel and message management and uses Socket.IO for real-time communication. Channel and message data is persisted in PostgreSQL.
 
 The service transports messages between players but does not determine whether the information contained in a message is correct.
+
+The private repository also provides database migrations, asynchronous replication with
+manual failover, and an optional 2PC participant. Participant support on `dev` is separate
+from the published image and from a complete Broker-coordinated workflow. See the
+[service documentation](https://github.com/DannaCojocari/discord-dms-service/tree/dev) for its configuration
+and verification procedures.
 
 #### Requirements
 
@@ -3002,26 +3013,17 @@ No other microservice directly accesses the Discord DMs database.
 
 #### Postman Collection
 
-The CPR collection is
-[`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
-Set a real login `token`, its `player_id`, and test `session_id`. Start the session through
-Session Service and set `channel_id` to one of its provisioned channels containing that player.
-Run Channels then Messages. Public channel creation, update and deletion must return 403;
-REST provisioning must return 410. Message tests create, edit and delete their own test message.
-Provisioned channels remain in place. These expectations require the Discord REST permissions
-release; do not run the mutation checks against an older deployment.
-Channel lists include only memberships; message reads/sends require membership, and message
-edits/deletes require authorship as well. The collection is a smoke test, not proof of every
-cross-player denial; the service's HTTP permission suite covers those cases with test doubles.
-Health requests use `discord_proxy_url=http://localhost:8086`; REST requests use Gateway on 8090.
-Discovery checks are optional: `discovery_url` has no default because CPR does not publish it.
-Set a reachable internal or explicitly forwarded address. Restart recovery requires a manual
-Discovery restart between the baseline and recovery requests.
+The [CPR collection](postman/pad-team-17-discord-dms.postman_collection.json) runs through Gateway.
+Its setup creates fresh test players, obtains tokens, starts a session, and waits for the
+required data. Run the collection from the beginning rather than entering tokens and IDs
+manually. It covers channel access and message creation, reading, editing, and deletion.
 
-The HTTP collection does not exercise live Socket.IO connections. For separate socket tests,
-pass each player's login JWT using `auth: { token }`, use a shared channel containing both
-players, emit `join_channel`, then send and receive a message. Use distinct replica connections
-to establish cross-replica delivery. Reverify this after deploying the authentication changes.
+Monitoring is optional. Discovery checks are in a manual folder, skipped by default.
+The collections retain test accounts and sessions for inspection. These HTTP checks do
+not establish database failover, distributed transaction completion, or Socket.IO delivery.
+
+Channel mutations and legacy provisioning are internal operations; Gateway rejects
+these public requests with `404`.
 
 #### Lab 3 integration notes
 
