@@ -232,7 +232,7 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.4.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.5.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
@@ -252,17 +252,18 @@ services:
 
   # ---------------------------------------------------------------- message broker
   message-broker:
-    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.1.0}
+    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.2.0}
     container_name: pad17-message-broker
     environment:
       DISCOVERY_URL: http://discovery-service:8000
       EVENT_DB_PATH: /data/events.db
       BROKER_END_SHIFT_2PC_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      BROKER_CREATE_APPLICANT_SAGA_ENABLED: ${CREATE_APPLICANT_SAGA_ENABLED:-false}
       BROKER_GATEWAY_TOKEN: ${BROKER_GATEWAY_TOKEN:-}
-      # Pass through the map from .env; an unset key uses the Broker's empty default.
-      BROKER_TRANSACTION_ADDRESSES:
+      BROKER_TRANSACTION_ADDRESSES: ${BROKER_TRANSACTION_ADDRESSES:?Set BROKER_TRANSACTION_ADDRESSES}
       PLAYER_SERVICE_TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
       SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
+      UNIVERSITY_RECORD_SERVICE_TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
     volumes:
       - message-broker-data:/data
     healthcheck:
@@ -410,7 +411,7 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.4.0}
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.5.0}
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
@@ -432,7 +433,7 @@ services:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.4.0}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.5.0}
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
       DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
@@ -444,6 +445,8 @@ services:
       SERVICE_HEARTBEAT_SECONDS: 15
       SESSION_CLIENT: grpc
       SESSION_SERVICE_NAME: server-moderation-session-service
+      TRANSACTIONS_ENABLED: ${UNIVERSITY_RECORD_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:

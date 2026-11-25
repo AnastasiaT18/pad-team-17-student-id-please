@@ -141,10 +141,11 @@ Credential (the saga tests next to the two-phase commit ones), the Gateway (`tes
   through the Gateway and the delivery of the queued event to a real University Record were not run end to end.
 - That University Record accepts the same `applicant_initialized` event twice without a second record is taken from
   its Postman collection ("same event again, still 200"); it was not run for this page.
-- The CPR compose does not enable the saga yet: it needs the Broker and Gateway releases that contain it, the
-  participants' `TRANSACTION_TOKEN`, `BROKER_TRANSACTION_ADDRESSES`, `BROKER_GATEWAY_TOKEN` and
-  `BROKER_CREATE_APPLICANT_SAGA_ENABLED`, and shares them with the end-shift configuration. That is part of the
-  PR that moves Applicant and Credential to 4.2.0.
+- CPR has the Broker-side saga toggle, but Applicant/Credential participant addresses, tokens and service
+  settings are left for their owner to configure. Keep `CREATE_APPLICANT_SAGA_ENABLED=false` until those
+  settings and the required Broker, Gateway, Applicant and Credential images are ready; Applicant and
+  Credential need version 4.2.0. The Gateway route and University Record queue delivery still need an
+  end-to-end run.
 - The Broker is a single process on SQLite, so the saga state is on one node, like the two-phase commit state.
 - A request without `Idempotency-Key` that got `503` and is sent again creates a second applicant.
 - The two-phase commit participants stay in the services, but the Broker's "create an applicant" workflow for

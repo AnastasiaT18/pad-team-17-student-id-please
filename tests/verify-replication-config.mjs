@@ -89,7 +89,7 @@ for (const service of ['analytics-scheduler', 'analytics-etl']) {
   const values = merged.services[service].environment;
   assert.ok(values.MODERATION_DSN.includes('moderation-db-router'));
   assert.ok(values.DISCORD_DSN.includes('discord-dms-db-router'));
-  for (const key of ['RULES_DSN', 'RECORD_DSN']) assert.ok(values[key].includes('target_session_attrs=read-write'));
+  for (const key of ['RULES_DSN', 'RECORD_DSN']) assert.ok(values[key].includes('target_session_attrs=primary'));
   for (const [key, pair] of [['APPLICANT_DSN', 'applicant'], ['CREDENTIAL_DSN', 'credential']]) {
     // "primary": the read-only reader role would make libpq reject every node with "read-write"
     assert.ok(values[key].includes('target_session_attrs=primary'));
