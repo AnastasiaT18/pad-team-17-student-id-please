@@ -101,8 +101,9 @@ The client's URL and body do not change: `POST /applicants` with `{"session_id":
 | Answer | When |
 |---|---|
 | `201` and the applicant's public profile, header `X-Saga-Id` | the saga completed. The profile is read back from Applicant, so `deception` is never sent. |
-| `409 CREATE_APPLICANT_FAILED`, with the participant's reason | a step refused, and what was done is undone |
-| `503 CREATE_APPLICANT_PENDING` | a compensation could not be confirmed yet; retry with the same `Idempotency-Key` |
+| `404 SESSION_NOT_FOUND`, `409 SESSION_NOT_ACTIVE`, `503 SESSION_SERVICE_UNAVAILABLE` | the Applicant refused the first step; the same answer as without the saga |
+| `409 CREATE_APPLICANT_FAILED`, with the participant's reason | a later step refused, and what was done is undone |
+| `503 CREATE_APPLICANT_PENDING` | the saga did not finish within the request's 4.5 s, or a compensation could not be confirmed yet; retry with the same `Idempotency-Key` |
 | `409 IDEMPOTENCY_KEY_REUSED` | the key was used with another body |
 | `502 INVALID_PARTICIPANT_RESPONSE` | the Applicant's result has no `applicant_id` |
 
@@ -112,7 +113,8 @@ step, never their results.
 
 When the Broker starts with the flag on it needs `BROKER_TRANSACTION_ADDRESSES` for `applicant-service` and
 `credential-service` and a valid `BROKER_GATEWAY_TOKEN`. In the CPR the participants' tokens are the same
-`APPLICANT_TRANSACTION_TOKEN` and `CREDENTIAL_TRANSACTION_TOKEN` as for two-phase commit.
+`APPLICANT_SERVICE_TRANSACTION_TOKEN` and `CREDENTIAL_SERVICE_TRANSACTION_TOKEN` as for two-phase commit; Compose
+gives each service its own as `TRANSACTION_TOKEN`, and `.env.example` already lists both addresses.
 
 ## Verify
 
@@ -138,14 +140,15 @@ Credential (the saga tests next to the two-phase commit ones), the Gateway (`tes
   outside the repository: the happy path, the same saga id again, a refusal at step 1, a refusal at step 2 (the
   applicant it created was deleted), a late Execute after the compensation, and Credential stopped in the middle
   (the saga waited in `COMPENSATING`, then finished both compensations after Credential came back). The route
-  through the Gateway and the delivery of the queued event to a real University Record were not run end to end.
+  through the Gateway was run on 25 Nov on a full Compose stack (Broker, Gateway, Applicant and Credential built
+  from their `dev` branches): the saga completed with the credentials readable at the `201` and the record then
+  in University Record's database, and with Credential stopped it was compensated and the same `Idempotency-Key`
+  then answered `409`.
 - That University Record accepts the same `applicant_initialized` event twice without a second record is taken from
   its Postman collection ("same event again, still 200"); it was not run for this page.
-- CPR has the Broker-side saga toggle, but Applicant/Credential participant addresses, tokens and service
-  settings are left for their owner to configure. Keep `CREATE_APPLICANT_SAGA_ENABLED=false` until those
-  settings and the required Broker, Gateway, Applicant and Credential images are ready; Applicant and
-  Credential need version 4.2.0. The Gateway route and University Record queue delivery still need an
-  end-to-end run.
+- CPR passes the participant addresses and tokens, but keep `CREATE_APPLICANT_SAGA_ENABLED=false` until the
+  pinned images have the saga: Applicant and Credential 4.2.0, and Broker and Gateway images newer than the
+  published 0.1.0 and 0.5.0.
 - The Broker is a single process on SQLite, so the saga state is on one node, like the two-phase commit state.
 - A request without `Idempotency-Key` that got `503` and is sent again creates a second applicant.
 - The two-phase commit participants stay in the services, but the Broker's "create an applicant" workflow for
