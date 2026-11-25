@@ -675,7 +675,7 @@ No other microservice directly accesses the Player Service database.
 
 #### Running this service
 
-The shared CPR Compose stack runs the published `0.4.1` image. From the CPR root, run `docker compose up -d player-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
+The shared CPR Compose stack runs the published `0.5.0` image. From the CPR root, run `docker compose up -d player-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
 
 **Standalone setup**
 
@@ -731,40 +731,52 @@ When running locally, the Player Service is available at `http://localhost:3000`
 
 Guarded endpoints read the caller from the `X-Player-Id` header, which the Gateway sets. When calling the service directly, send that header yourself; otherwise go through the Gateway.
 
-**Running with Docker**
+**Running with Docker in the service repo**
 
-The service and its PostgreSQL database can be started using Docker Compose:
+Player connects directly to a PostgreSQL 17 cluster with one writer and two
+asynchronous standbys. This procedure initializes a **fresh local test cluster**.
+Use a fresh Compose project for disposable data. Set the database credentials and
+`JWT_SECRET` in your local `.env` first.
 
-```bash
-docker compose up --build -d
+From the Player repo in PowerShell:
+
+```powershell
+docker build -t player-postgres:lab5 ./infrastructure/postgres
+$env:PLAYER_DATABASE_IMAGE = 'player-postgres:lab5'
+$env:PLAYER_REPLICATION_PASSWORD = Read-Host 'Password for the local replication account'
 ```
 
-The Player Service is available on the host at `http://localhost:3000`. PostgreSQL is exposed
-on the host at `5432`, with its data stored in the `player_pg_data` named volume so it survives
-container restarts.
+Start the writer first so the standbys have a database to copy.
 
-The published Docker image is:
-
-```
-janetag/player-service:0.4.1
-```
-
-To check the containers:
-
-```bash
-docker compose ps
+```powershell
+docker compose -p player-ha up -d --wait player-db-1
+docker compose -p player-ha up -d --wait player-db-2 player-db-3
+docker compose -p player-ha up -d --build --remove-orphans player-service
+docker compose -p player-ha exec -T player-db-1 sh -c 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT application_name, state, sync_state FROM pg_stat_replication ORDER BY application_name;"'
 ```
 
-To stop the service:
+Expect two rows, for `db-2` and `db-3`, both with state `streaming` and sync state
+`async`. Player is available at `http://127.0.0.1:3300`. For a local API check,
+use this address in the Player Postman collection. Event delivery through the
+Message Broker requires the shared CPR stack.
 
-```bash
-docker compose down
-```
+Use `docker compose -p player-ha stop` to stop the test cluster and keep its
+volumes. This procedure tests initial replication. Failover and rejoining are
+operated separately through the shared deployment. Set `DB_HOSTS` to a comma-separated list of nodes when running against a replicated cluster. Player checks for a writable node when it borrows a connection. Single-database deployments can continue using `DB_HOST`.
 
-The service starts without RabbitMQ. Event delivery requires the custom Message Broker and
-Service Discovery from the CPR stack. The local Compose file exposes gRPC on `localhost:9090`
-for testing; the team deployment should keep that port inside its Docker network.
-`JWT_SECRET` signs login tokens and must match the Gateway configuration.
+The Lab 5 Player image is `janetag/player-service:0.5.0`.
+
+#### End-shift two-phase commit
+
+When CPR enables end-shift 2PC, the Broker sends Player the results calculated
+by Session. Player saves them during `Prepare`, applies them together on
+`Commit`, and discards them on `Rollback`. A repeated commit leaves the
+player's XP and shift counts unchanged.
+
+The internal listener is off by default. To enable the participant, set
+`TRANSACTIONS_ENABLED=true` and a `TRANSACTION_TOKEN` of at least 32 printable
+non-space ASCII characters that matches the Broker's Player token.
+`TRANSACTION_GRPC_ADDRESS` defaults to `0.0.0.0:9091`.
 
 #### Application logs
 
@@ -836,6 +848,9 @@ IDs are never labels. Shared Prometheus scraping is configured separately in CPR
 #### Postman collection
 
 The REST API can be tested using the [Player Postman collection](postman/pad-team-17-player.postman_collection.json). Requests go through the Gateway, so log in first and use the returned token as a Bearer token.
+
+The Gateway `/metrics` check verifies Gateway's authentication cache metrics.
+The Player metrics check goes through the Broker to Player.
 
 ---
 
@@ -925,7 +940,10 @@ If a downstream call fails, the session is put back to `created` and the Moderat
 
 **Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_NOT_ACTIVE` if the session isn't currently active.
 
-Triggers publishing `shift_ended` (below).
+With 2PC enabled through Gateway, success confirms that Session and Player
+both committed. A retry by the same moderator returns the original `200` body.
+With 2PC disabled, Session queues `shift_ended` and an already-ended shift
+returns `409 SESSION_NOT_ACTIVE`.
 
 **Outgoing gRPC calls**
 
@@ -1041,7 +1059,7 @@ the existing stale/duplicate-decision checks.
 
 **Events published (custom Message Broker over gRPC)**
 
-`shift_ended` — published when a moderation shift finishes.
+`shift_ended` — published when a moderation shift finishes with end-shift 2PC disabled.
 
 The event is persisted in the `shift_ended_outbox` PostgreSQL table in the same transaction that marks the session as ended.
 
@@ -1164,7 +1182,7 @@ No other microservice directly accesses the Session Service database.
 
 #### Running this service
 
-The shared CPR Compose stack runs the published `0.4.1` image. From the CPR root, run `docker compose up -d server-moderation-session-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
+The shared CPR Compose stack runs the published `0.5.0` image. From the CPR root, run `docker compose up -d server-moderation-session-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
 
 **Standalone setup**
 
@@ -1233,43 +1251,71 @@ npm run start:dev
 
 When running locally, the Session Service is available at `http://localhost:3001`.
 
-**Running with Docker**
+**Running with Docker in the service repo**
 
-The service and its PostgreSQL database can be started using Docker Compose:
+Session uses a PostgreSQL 17 primary and two asynchronous standbys in its local
+Compose project. The three nodes reuse the same image as Player and keep their
+data in separate Session volumes. Session uses `DB_HOSTS` to find the current
+writer. Single-database setups can still use `DB_HOST`.
 
-```bash
-docker compose up --build -d
+For a fresh local test, set the database credentials in Session's `.env`.
+If the PostgreSQL image has not been built yet, run this from the Player repo:
+
+```powershell
+docker build -t player-postgres:lab5 ./infrastructure/postgres
 ```
+
+Then run these commands from the Session repo. Start the primary first so the
+standbys can copy from it.
+
+```powershell
+$env:SESSION_DATABASE_IMAGE = 'player-postgres:lab5'
+$env:SESSION_REPLICATION_PASSWORD = Read-Host 'Choose a password for Session replication'
+docker compose -p session-ha up -d --wait session-db-1
+docker compose -p session-ha up -d --wait session-db-2 session-db-3
+docker compose -p session-ha up -d --build session-service
+```
+
+Check replication on the initial primary:
+
+```powershell
+'SELECT application_name, state, sync_state FROM pg_stat_replication ORDER BY application_name;' |
+  docker compose -p session-ha exec -T session-db-1 sh -c 'exec psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+Expect `db-2` and `db-3` to show `streaming` and `async`.
+Once Session has finished starting, check `http://127.0.0.1:3301/health`.
+The database ports are internal to Docker Compose.
+
 
 The Session Service uses the team's custom Message Broker instead of RabbitMQ for asynchronous event communication.
 
-When a moderation shift ends, the `shift_ended` event is saved in the PostgreSQL outbox within the same transaction as the session update. A background dispatcher publishes the event to the Message Broker using gRPC.
+With end-shift 2PC disabled, Session saves the `shift_ended` event in the PostgreSQL outbox within the same transaction as the session update. A background dispatcher publishes the event to the Message Broker using gRPC.
 
 If the broker is unavailable, the event remains in the outbox and publication is retried.
 
 For end-to-end communication, the Session Service must run alongside the Message Broker and Service Discovery in the team's shared CPR Docker Compose stack.
 
-The Session Service is available on the host at `http://localhost:3001`. PostgreSQL is exposed
-on the host at `5433`, with its data stored in the `session_pg_data` named volume so it survives
-container restarts.
-
 The published Docker image is:
 
 ```
-janetag/server-moderation-session-service:0.4.1
+janetag/server-moderation-session-service:0.5.0
 ```
 
-To check the containers:
+Use `docker compose -p session-ha ps` to check the containers and
+`docker compose -p session-ha stop` to stop them and keep their data volumes.
 
-```bash
-docker compose ps
-```
+#### End-shift two-phase commit
 
-To stop the service:
+In CPR, `END_SHIFT_2PC_ENABLED=true` routes end-shift through the Broker's
+coordinator. Session reserves the shift during `Prepare`, closes it on
+`Commit`, and releases the reservation on `Rollback`. Player applies the
+results through its own participant.
 
-```bash
-docker compose down
-```
+The internal listener is off by default. To enable the participant, set
+`TRANSACTIONS_ENABLED=true` and a `TRANSACTION_TOKEN` of at least 32 printable
+non-space ASCII characters that matches the Broker's Session token.
+`TRANSACTION_GRPC_ADDRESS` defaults to `0.0.0.0:9091`.
 
 #### Application logs
 
@@ -1364,7 +1410,12 @@ changes.
 
 #### Postman collection
 
-The REST API can be tested using the [Session Postman collection](postman/pad-team-17-server-moderation-session.postman_collection.json).
+The [Session Postman collection](postman/pad-team-17-server-moderation-session.postman_collection.json) uses Gateway. Set its `end_shift_2pc_enabled` variable
+to `true` if CPR has end-shift 2PC enabled. Run **End session** first so the
+retry test can compare the second response with the first one.
+
+The Gateway `/metrics` check verifies Gateway's authentication cache metrics.
+The Session metrics check goes through the Broker to Session.
 
 ---
 
