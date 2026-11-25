@@ -254,6 +254,20 @@ serve `pad.saga.v1.SagaParticipant` ([`proto/saga.proto`](proto/saga.proto)) on 
 [the flow, the contract and the coordinator's rules](docs/saga.md); the live check of the participants is
 `bash tests/verify-saga-participants.sh`.
 
+To turn it on, set in `.env` (`BROKER_TRANSACTION_ADDRESSES` in `.env.example` already lists both participants):
+
+```dotenv
+CREATE_APPLICANT_SAGA_ENABLED=true
+APPLICANT_SERVICE_TRANSACTION_TOKEN=<32+ printable characters>
+CREDENTIAL_SERVICE_TRANSACTION_TOKEN=<32+ printable characters, another one>
+BROKER_GATEWAY_TOKEN=<32+ printable characters, the same one end shift uses>
+```
+
+Compose gives the Broker both tokens and each service its own as `TRANSACTION_TOKEN`. Clients still call
+`POST /applicants` through the Gateway; with an optional `Idempotency-Key` a retry resumes the same saga. Keep the
+flag `false` until the pinned images have the saga: Applicant and Credential 4.2.0, and Broker and Gateway images
+newer than the published 0.1.0 and 0.5.0.
+
 ## Service Boundaries
 
 ### Player Service
@@ -1390,6 +1404,15 @@ records — never from `deception` itself.
 is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
 it is not running, `503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be
 asked - see "Shift check and circuit breaker (Lab 3)" below.
+
+**As a saga (Lab 5, Grade 9).** With `CREATE_APPLICANT_SAGA_ENABLED=true` the Message Broker runs this request as
+the create-applicant saga; the request, the `201` body and the errors above stay the same. The client may add the
+header `Idempotency-Key: <string>`: the same key with the same body resumes the same saga instead of creating a
+second applicant. The `201` also carries `X-Saga-Id` (see `GET /sagas/{saga_id}` in the Message Broker), and the
+applicant's credentials already exist when it arrives. Extra errors: `409 CREATE_APPLICANT_FAILED` if a later step
+refused and the applicant was deleted again, `503 CREATE_APPLICANT_PENDING` if the saga did not finish in time
+(retry with the same key), `409 IDEMPOTENCY_KEY_REUSED` if the key was used with another body,
+`502 INVALID_PARTICIPANT_RESPONSE`. See [the create-applicant saga](docs/saga.md).
 
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
@@ -3215,6 +3238,27 @@ now publishes through the broker, so RabbitMQ is no longer part of the Compose f
 `/topics` answers `503 DISCOVERY_UNAVAILABLE` when Service Discovery cannot be asked. Reading the
 dead letters does not retry or remove them. The durable queue, dead letters included, is the SQLite
 file `EVENT_DB_PATH`, which Compose keeps in the `message-broker-data` volume.
+
+**Sagas (Lab 5, Grade 9)**
+
+```json
+// GET /sagas/{saga_id} - the X-Saga-Id of a POST /applicants that ran as a saga
+{
+  "saga_id": "uuid",
+  "workflow": "create_applicant",
+  "state": "RUNNING | COMPENSATING | COMPLETED | COMPENSATED",
+  "failure": "string | null",
+  "steps": [
+    { "service": "applicant-service", "operation": "applicant.create.v1", "kind": "compensable", "state": "DONE" },
+    { "service": "credential-service", "operation": "credential.create.v1", "kind": "compensable", "state": "DONE" },
+    { "service": "university-record-service", "operation": "university-record.applicant-initialized.v1",
+      "kind": "retriable", "state": "DONE" }
+  ]
+}
+```
+A step is `PENDING`, `STARTED`, `DONE`, `FAILED` or `COMPENSATED`; what a step returned is never shown.
+Errors: `404 SAGA_NOT_FOUND`, `503 STORAGE_UNAVAILABLE`. The sagas are in the same SQLite file as the
+queue. See [the create-applicant saga](docs/saga.md).
 
 **Logs and metrics**
 
