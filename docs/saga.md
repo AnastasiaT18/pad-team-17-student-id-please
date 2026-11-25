@@ -146,9 +146,8 @@ Credential (the saga tests next to the two-phase commit ones), the Gateway (`tes
   then answered `409`.
 - That University Record accepts the same `applicant_initialized` event twice without a second record is taken from
   its Postman collection ("same event again, still 200"); it was not run for this page.
-- CPR passes the participant addresses and tokens, but keep `CREATE_APPLICANT_SAGA_ENABLED=false` until the
-  pinned images have the saga: Applicant and Credential 4.2.0, and Broker and Gateway images newer than the
-  published 0.1.0 and 0.5.0.
+- CPR passes the participant addresses and tokens, and the pinned images have the saga (Applicant and Credential
+  4.2.0, Broker 0.2.0, Gateway 0.6.0). It stays off until `CREATE_APPLICANT_SAGA_ENABLED=true` is set with the tokens.
 - The Broker is a single process on SQLite, so the saga state is on one node, like the two-phase commit state.
 - A request without `Idempotency-Key` that got `503` and is sent again creates a second applicant.
 - The two-phase commit participants stay in the services, but the Broker's "create an applicant" workflow for
