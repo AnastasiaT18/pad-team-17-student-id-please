@@ -703,6 +703,7 @@
 					"script": {
 						"type": "text/javascript",
 						"exec": [
+							"pm.collectionVariables.unset(\"end_shift_result\");",
 							"pm.test(\"Returns 200\", () => pm.response.to.have.status(200));",
 							"pm.test(\"Returns ended session and final results\", () => {",
 							"  const body = pm.response.json();",
@@ -716,6 +717,9 @@
 							"    pm.expect(result.shift_completed).to.be.a(\"boolean\");",
 							"    pm.expect(result.disciplinary_action).to.be.a(\"boolean\");",
 							"  });",
+							"  if (pm.response.code === 200) {",
+							"    pm.collectionVariables.set(\"end_shift_result\", JSON.stringify(body));",
+							"  }",
 							"});"
 						]
 					}
@@ -745,12 +749,12 @@
 						"end"
 					]
 				},
-				"description": "200 means Session and its immutable shift_ended event were saved together. The outbox worker publishes to the custom broker; Player applies results asynchronously. Do not assert immediate XP changes here."
+				"description": "With 2PC enabled, 200 confirms Session and Player committed. In legacy mode, Session queues shift_ended and Player applies it asynchronously. This request saves its response for the retry check."
 			},
 			"response": []
 		},
 		{
-			"name": "End session - already ended",
+			"name": "End session - retry",
 			"request": {
 				"auth": {
 					"type": "bearer",
@@ -775,7 +779,7 @@
 						"end"
 					]
 				},
-				"description": "Repeated end requests do not queue another shift event. The existing outbox worker owns retries."
+				"description": "Run End session first with the same moderator. Match end_shift_2pc_enabled to your CPR setting. A committed 2PC request replays its 200 response. The legacy endpoint returns 409."
 			},
 			"event": [
 				{
@@ -783,8 +787,18 @@
 					"script": {
 						"type": "text/javascript",
 						"exec": [
-							"pm.test(\"Returns 409\", () => pm.response.to.have.status(409));",
-							"pm.test(\"Returns SESSION_NOT_ACTIVE\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_ACTIVE\"));"
+							"const twoPc = String(pm.variables.get(\"end_shift_2pc_enabled\")).toLowerCase() === \"true\";",
+							"if (twoPc) {",
+							"  pm.test(\"Returns 200 with the original result\", () => {",
+							"    pm.response.to.have.status(200);",
+							"    const original = pm.collectionVariables.get(\"end_shift_result\");",
+							"    pm.expect(original, \"Run End session first\").to.be.a(\"string\").and.not.empty;",
+							"    pm.expect(pm.response.json()).to.deep.equal(JSON.parse(original));",
+							"  });",
+							"} else {",
+							"  pm.test(\"Returns 409\", () => pm.response.to.have.status(409));",
+							"  pm.test(\"Returns SESSION_NOT_ACTIVE\", () => pm.expect(pm.response.json().error.code).to.eql(\"SESSION_NOT_ACTIVE\"));",
+							"}"
 						]
 					}
 				}
@@ -961,17 +975,10 @@
 					]
 				},
 				{
-					"name": "Gateway blocks internal /metrics",
+					"name": "Gateway authentication cache metrics",
 					"request": {
 						"auth": {
-							"type": "bearer",
-							"bearer": [
-								{
-									"key": "token",
-									"value": "{{token}}",
-									"type": "string"
-								}
-							]
+							"type": "noauth"
 						},
 						"method": "GET",
 						"header": [],
@@ -984,7 +991,7 @@
 								"metrics"
 							]
 						},
-						"description": "Authenticated player requests must not gain access to operational endpoints."
+						"description": "Gateway exposes its own authentication metrics. The service metrics are checked separately through the Broker."
 					},
 					"event": [
 						{
@@ -992,7 +999,13 @@
 							"script": {
 								"type": "text/javascript",
 								"exec": [
-									"pm.test(\"Gateway does not expose this internal route\", () => pm.response.to.have.status(404));"
+									"pm.test(\"Returns Gateway metrics\", () => {",
+									"  pm.response.to.have.status(200);",
+									"  pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/plain\");",
+									"  const text = pm.response.text();",
+									"  pm.expect(text).to.include(\"# TYPE gateway_auth_cache_lookups_total counter\");",
+									"  pm.expect(text).to.include('gateway_jwt_verifications_total{service=\"gateway\"}');",
+									"});"
 								]
 							}
 						}
@@ -1060,6 +1073,11 @@
 			"key": "broker_url",
 			"value": "http://localhost:8100",
 			"description": "Broker HTTP URL for internal operator checks; not its gRPC port."
+		},
+		{
+			"key": "end_shift_2pc_enabled",
+			"value": "false",
+			"description": "Set to true when CPR has END_SHIFT_2PC_ENABLED=true."
 		}
 	]
 }
