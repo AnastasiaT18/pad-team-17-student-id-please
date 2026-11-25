@@ -31,9 +31,10 @@ sequenceDiagram
 pad.transactions.v1`, service `TransactionParticipant`. Each service copies it and adds its own `java_*` options.
 The coordinator calls a participant at its fixed address - `applicant-service:9091`, `credential-service:9091` -
 a port apart from the `grpc_port` the services call each other on, and sends the participant's token in the
-`x-transaction-token` metadata. In the CPR the tokens are `APPLICANT_TRANSACTION_TOKEN` and
-`CREDENTIAL_TRANSACTION_TOKEN`, and a service receives its own as `TRANSACTION_TOKEN` (at least 32 printable
-characters; without it the port is not opened). A call without the token, or with another one, is `UNAUTHENTICATED`.
+`x-transaction-token` metadata. In the CPR the tokens are `APPLICANT_SERVICE_TRANSACTION_TOKEN` and
+`CREDENTIAL_SERVICE_TRANSACTION_TOKEN` (the names the Broker reads), and a service receives its own as
+`TRANSACTION_TOKEN` (at least 32 printable characters; without it the port is not opened). A call without the
+token, or with another one, is `UNAUTHENTICATED`.
 
 Every answer is a `TransactionReply { transaction_id, state, result_json }`; the coordinator accepts a Prepare only
 when `state` is `PREPARED`, and a decision only when it is `COMMITTED` / `ABORTED` as asked.

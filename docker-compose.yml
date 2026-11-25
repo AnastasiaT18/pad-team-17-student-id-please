@@ -264,6 +264,8 @@ services:
       PLAYER_SERVICE_TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
       SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
       UNIVERSITY_RECORD_SERVICE_TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
+      APPLICANT_SERVICE_TRANSACTION_TOKEN: ${APPLICANT_SERVICE_TRANSACTION_TOKEN:-}
+      CREDENTIAL_SERVICE_TRANSACTION_TOKEN: ${CREDENTIAL_SERVICE_TRANSACTION_TOKEN:-}
     volumes:
       - message-broker-data:/data
     healthcheck:
@@ -373,6 +375,9 @@ services:
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
       SESSION_DIRECTORY: grpc
+      # Saga and two-phase commit participant (Lab 5) on the internal gRPC port 9091, for calls that
+      # carry this token. Empty: the participant is not started.
+      TRANSACTION_TOKEN: ${APPLICANT_SERVICE_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:
@@ -399,6 +404,9 @@ services:
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
       SESSION_DIRECTORY: grpc
+      # Saga and two-phase commit participant (Lab 5) on the internal gRPC port 9091, for calls that
+      # carry this token. Empty: the participant is not started.
+      TRANSACTION_TOKEN: ${CREDENTIAL_SERVICE_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:
