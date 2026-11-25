@@ -221,13 +221,13 @@ variables before starting the scheduler. The image is the public
 
 ## Application cache (Lab 5, Grade 6)
 
-Compose provisions `application-cache`, a dedicated internal Redis instance. The Gateway (0.5.0)
+Compose provisions `application-cache`, a dedicated internal Redis instance. The Gateway (0.6.0)
 keeps verified JWTs in it and Server Rules (v0.5.0) keeps its rule sets there, keyed by version.
 See [setup, architecture and verification](docs/lab5-cache.md).
 
 Server Rules v0.5.0 supports consistent-hash sharding. It is opt-in: start the `cache-sharding`
 profile (which adds `application-cache-2`) and set `CACHE_REDIS_SHARDS` as shown in `.env.example`.
-Gateway 0.5.0 still uses the single Redis URL; its sharded client is not yet in a published image.
+Gateway 0.6.0 routes its JWT cache over the same `CACHE_REDIS_SHARDS` list when it is set.
 
 ## Two-phase commit (Lab 5, Grade 8)
 
@@ -264,9 +264,9 @@ BROKER_GATEWAY_TOKEN=<32+ printable characters, the same one end shift uses>
 ```
 
 Compose gives the Broker both tokens and each service its own as `TRANSACTION_TOKEN`. Clients still call
-`POST /applicants` through the Gateway; with an optional `Idempotency-Key` a retry resumes the same saga. Keep the
-flag `false` until the pinned images have the saga: Applicant and Credential 4.2.0, and Broker and Gateway images
-newer than the published 0.1.0 and 0.5.0.
+`POST /applicants` through the Gateway; with an optional `Idempotency-Key` a retry resumes the same saga. The
+pinned images have the saga (Applicant and Credential 4.2.0, Broker 0.2.0, Gateway 0.6.0); it stays off while the
+flag is `false`, the default in `.env.example`.
 
 ## Service Boundaries
 
@@ -1691,7 +1691,7 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -1710,7 +1710,7 @@ Session replica does not cut the service off from the healthy one.
 
 **Logs (Lab 4):** `GET /logs` downloads the responding replica's log file as an attachment (`?tail=N` returns its last N lines as text). The Gateway has no route to it; through the Message Broker: `curl -OJ localhost:8100/forward/applicant-service/logs`.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:4.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:4.2.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -2002,7 +2002,7 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -2021,7 +2021,7 @@ Session replica does not cut the service off from the healthy one.
 
 **Logs (Lab 4):** `GET /logs` downloads the responding replica's log file as an attachment (`?tail=N` returns its last N lines as text). The Gateway has no route to it; through the Message Broker: `curl -OJ localhost:8100/forward/credential-service/logs`.
 
-**DockerHub:** `kutulin/pad-17-credential-service:4.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:4.2.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 

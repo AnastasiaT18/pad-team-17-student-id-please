@@ -232,7 +232,7 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.5.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.6.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
@@ -360,7 +360,7 @@ services:
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.1.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.2.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
@@ -389,7 +389,7 @@ services:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.1.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.2.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432

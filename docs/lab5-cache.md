@@ -2,9 +2,9 @@
 
 ## Status and architecture
 
-Compose provisions the shared application Redis. Gateway 0.5.0 uses it for verified JWTs,
-and Server Rules v0.5.0 uses it for versioned rule sets. Server Rules supports the optional
-consistent-hash shard list; Gateway sharding is not yet available in a published image.
+Compose provisions the shared application Redis. Gateway 0.6.0 uses it for verified JWTs,
+and Server Rules v0.5.0 uses it for versioned rule sets. Both support the optional
+consistent-hash shard list.
 
 ```mermaid
 flowchart LR
@@ -12,7 +12,7 @@ flowchart LR
     Gateway --> Broker[Message Broker]
     Broker --> Rules[Server Rules: two replicas]
     Rules --> DB[(Rules PostgreSQL primary)]
-    Gateway -->|single Redis URL| Cache[(application-cache:6379)]
+    Gateway -->|single URL or configured shards| Cache[(application-cache:6379)]
     Rules -->|single URL or configured shards| Cache
     Discord[Discord DMs: two replicas] --> Redis[(redis:6379)]
 ```
@@ -28,7 +28,7 @@ the existing architecture diagram; ETL, warehouse and database replication are s
 | `RULES_CACHE_TTL_SECONDS` | `60` | Cached rule lifetime |
 | `AUTH_CACHE_TTL_SECONDS` | `60` | Maximum token-cache lifetime; never beyond token expiry |
 | `CACHE_REDIS_URL` | `redis://application-cache:6379/0` | Single Redis URL supplied to Gateway and both Rules replicas |
-| `CACHE_REDIS_SHARDS` | *(empty)* | Optional consistent-hash shard list supported by Server Rules |
+| `CACHE_REDIS_SHARDS` | *(empty)* | Optional consistent-hash shard list supported by Gateway (0.6.0) and Server Rules |
 
 Redis has no published host port. It is accessible to containers on the Compose network,
 which is treated as trusted, like the existing internal service connections. There is no
