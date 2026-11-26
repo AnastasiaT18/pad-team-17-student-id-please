@@ -14,7 +14,94 @@
 
 name: pad-team-17
 
+# Grade 5 private DB replication is enabled explicitly with docker-compose.replication.yml.
+# See docs/lab5-private-db-replication.md before changing an existing deployment.
+
+# Analytics runs from a published image; no private source checkout is needed.
+x-analytics-environment: &analytics-environment
+  WAREHOUSE_DSN: ${ANALYTICS_WAREHOUSE_DSN:?Set ANALYTICS_WAREHOUSE_DSN}
+  MODERATION_DSN: ${ANALYTICS_MODERATION_DSN:?Set ANALYTICS_MODERATION_DSN}
+  DISCORD_DSN: ${ANALYTICS_DISCORD_DSN:?Set ANALYTICS_DISCORD_DSN}
+  PLAYER_DSN: ${ANALYTICS_PLAYER_DSN:?Set ANALYTICS_PLAYER_DSN}
+  SESSION_DSN: ${ANALYTICS_SESSION_DSN:?Set ANALYTICS_SESSION_DSN}
+  APPLICANT_DSN: ${ANALYTICS_APPLICANT_DSN:?Set ANALYTICS_APPLICANT_DSN}
+  CREDENTIAL_DSN: ${ANALYTICS_CREDENTIAL_DSN:?Set ANALYTICS_CREDENTIAL_DSN}
+  RULES_DSN: ${ANALYTICS_RULES_DSN:?Set ANALYTICS_RULES_DSN}
+  RECORD_DSN: ${ANALYTICS_RECORD_DSN:?Set ANALYTICS_RECORD_DSN}
+  MODERATION_TIMEZONE: ${ANALYTICS_MODERATION_TIMEZONE:-UTC}
+  DISCORD_TIMEZONE: ${ANALYTICS_DISCORD_TIMEZONE:-UTC}
+  PLAYER_TIMEZONE: ${ANALYTICS_PLAYER_TIMEZONE:-UTC}
+  SESSION_TIMEZONE: ${ANALYTICS_SESSION_TIMEZONE:-UTC}
+  APPLICANT_TIMEZONE: ${ANALYTICS_APPLICANT_TIMEZONE:-UTC}
+  CREDENTIAL_TIMEZONE: ${ANALYTICS_CREDENTIAL_TIMEZONE:-UTC}
+  RULES_TIMEZONE: ${ANALYTICS_RULES_TIMEZONE:-UTC}
+  RECORD_TIMEZONE: ${ANALYTICS_RECORD_TIMEZONE:-UTC}
+  ETL_INTERVAL_SECONDS: ${ETL_INTERVAL_SECONDS:-300}
+  ETL_RECONCILE_SECONDS: ${ETL_RECONCILE_SECONDS:-86400}
+  ETL_OVERLAP_SECONDS: ${ETL_OVERLAP_SECONDS:-600}
+
+x-analytics-dependencies: &analytics-dependencies
+  analytics-migrate:
+    condition: service_completed_successfully
+  moderation-db:
+    condition: service_healthy
+  discord-dms-db:
+    condition: service_healthy
+  player-db:
+    condition: service_healthy
+  server-moderation-session-db:
+    condition: service_healthy
+  applicant-db:
+    condition: service_healthy
+  credential-db:
+    condition: service_healthy
+  server-rules-db:
+    condition: service_healthy
+  university-record-db:
+    condition: service_healthy
+
 services:
+  # ---------------------------------------------------------------- analytics (Lab 5, Grade 4)
+  analytics-warehouse:
+    container_name: pad17-analytics-warehouse
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: analytics
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: ${ANALYTICS_WAREHOUSE_PASSWORD:?Set ANALYTICS_WAREHOUSE_PASSWORD}
+    volumes:
+      - analytics-warehouse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U analytics -d analytics']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  analytics-migrate:
+    container_name: pad17-analytics-migrate
+    image: ${ANALYTICS_IMAGE:-dannacojocari/pad-team-17-analytics:v0.1.0}
+    command: [--migrate]
+    environment:
+      WAREHOUSE_DSN: ${ANALYTICS_WAREHOUSE_DSN:?Set ANALYTICS_WAREHOUSE_DSN}
+    depends_on:
+      analytics-warehouse:
+        condition: service_healthy
+
+  analytics-scheduler:
+    container_name: pad17-analytics-scheduler
+    image: ${ANALYTICS_IMAGE:-dannacojocari/pad-team-17-analytics:v0.1.0}
+    entrypoint: [python, -m, etl.schedule]
+    environment: *analytics-environment
+    depends_on: *analytics-dependencies
+    restart: unless-stopped
+
+  analytics-etl:
+    container_name: pad17-analytics-etl
+    image: ${ANALYTICS_IMAGE:-dannacojocari/pad-team-17-analytics:v0.1.0}
+    profiles: [tools]
+    environment: *analytics-environment
+    depends_on: *analytics-dependencies
+
   # ---------------------------------------------------------------- infrastructure
 
   player-db:
@@ -145,7 +232,7 @@ services:
 
   # ---------------------------------------------------------------- gateway
   gateway-service:
-    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.4.0}
+    image: anastasiatiganescu/gateway-service:${GATEWAY_VERSION:-0.6.0}
     container_name: pad17-gateway-service
     environment:
       JWT_SECRET: ${JWT_SECRET}
@@ -153,6 +240,10 @@ services:
       TASK_TIMEOUT_SECONDS: 5
       CONCURRENT_TASK_LIMIT: 20
       BROKER_URL: http://message-broker:8000
+      BROKER_GATEWAY_TOKEN: ${BROKER_GATEWAY_TOKEN:-}
+      CACHE_REDIS_URL: redis://application-cache:6379/0
+      CACHE_REDIS_SHARDS: ${CACHE_REDIS_SHARDS:-}
+      AUTH_CACHE_TTL_SECONDS: ${AUTH_CACHE_TTL_SECONDS:-60}
     depends_on:
       message-broker:
         condition: service_healthy
@@ -161,11 +252,20 @@ services:
 
   # ---------------------------------------------------------------- message broker
   message-broker:
-    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.1.0}
+    image: anastasiatiganescu/message-broker:${BROKER_VERSION:-0.2.0}
     container_name: pad17-message-broker
     environment:
       DISCOVERY_URL: http://discovery-service:8000
       EVENT_DB_PATH: /data/events.db
+      BROKER_END_SHIFT_2PC_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      BROKER_CREATE_APPLICANT_SAGA_ENABLED: ${CREATE_APPLICANT_SAGA_ENABLED:-false}
+      BROKER_GATEWAY_TOKEN: ${BROKER_GATEWAY_TOKEN:-}
+      BROKER_TRANSACTION_ADDRESSES: ${BROKER_TRANSACTION_ADDRESSES:?Set BROKER_TRANSACTION_ADDRESSES}
+      PLAYER_SERVICE_TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
+      SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
+      UNIVERSITY_RECORD_SERVICE_TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
+      APPLICANT_SERVICE_TRANSACTION_TOKEN: ${APPLICANT_SERVICE_TRANSACTION_TOKEN:-}
+      CREDENTIAL_SERVICE_TRANSACTION_TOKEN: ${CREDENTIAL_SERVICE_TRANSACTION_TOKEN:-}
     volumes:
       - message-broker-data:/data
     healthcheck:
@@ -201,7 +301,7 @@ services:
 
   # ---------------------------------------------------------------- pair 1 (Janeta)
   player-service:
-    image: janetag/player-service:${PLAYER_VERSION:-0.4.1}
+    image: janetag/player-service:${PLAYER_VERSION:-0.5.0}
     environment:
       DB_HOST: player-db
       DB_PORT: 5432
@@ -213,6 +313,8 @@ services:
       PORT: 3000
       GRPC_PORT: 9090
       SERVICE_NAME: player-service
+      TRANSACTIONS_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${PLAYER_SERVICE_TRANSACTION_TOKEN:-}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       LOG_DIR: /logs
     volumes:
@@ -226,7 +328,7 @@ services:
         condition: service_healthy
 
   server-moderation-session-service:
-    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.4.1}
+    image: janetag/server-moderation-session-service:${SERVER_MODERATION_SESSION_VERSION:-0.5.0}
     environment:
       DB_HOST: server-moderation-session-db
       DB_PORT: 5432
@@ -239,6 +341,8 @@ services:
       PORT: 3001
       GRPC_PORT: 9090
       SERVICE_NAME: server-moderation-session-service
+      TRANSACTIONS_ENABLED: ${END_SHIFT_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN:-}
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       BROKER_GRPC_URL: message-broker:9090
       BROKER_PUBLISH_TIMEOUT_MS: 1500
@@ -256,7 +360,7 @@ services:
   # ---------------------------------------------------------------- pair 2 (Catalin)
 
   applicant-service:
-    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.1.0}
+    image: kutulin/pad-17-applicant-service:${APPLICANT_VERSION:-4.2.0}
     environment:
       DB_HOST: applicant-db
       DB_PORT: 5432
@@ -271,6 +375,9 @@ services:
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
       SESSION_DIRECTORY: grpc
+      # Saga and two-phase commit participant (Lab 5) on the internal gRPC port 9091, for calls that
+      # carry this token. Empty: the participant is not started.
+      TRANSACTION_TOKEN: ${APPLICANT_SERVICE_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:
@@ -282,7 +389,7 @@ services:
         condition: service_healthy
 
   credential-service:
-    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.1.0}
+    image: kutulin/pad-17-credential-service:${CREDENTIAL_VERSION:-4.2.0}
     environment:
       DB_HOST: credential-db
       DB_PORT: 5432
@@ -297,6 +404,9 @@ services:
       SERVICE_DISCOVERY_URL: http://discovery-service:8000
       # Shifts are checked with Server Moderation Session Service over gRPC, behind a circuit breaker.
       SESSION_DIRECTORY: grpc
+      # Saga and two-phase commit participant (Lab 5) on the internal gRPC port 9091, for calls that
+      # carry this token. Empty: the participant is not started.
+      TRANSACTION_TOKEN: ${CREDENTIAL_SERVICE_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:
@@ -309,7 +419,7 @@ services:
 
   # ---------------------------------------------------------------- pair 3 (Anastasia)
   server-rules-service:
-    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.4.0}
+    image: anastasiatiganescu/server-rules-service:${SERVER_RULES_VERSION:-v0.5.0}
     environment:
       DB_URL: jdbc:postgresql://server-rules-db:5432/rules_db
       DB_USERNAME: ${SERVER_RULES_DB_USER}
@@ -319,6 +429,9 @@ services:
       SERVICE_HTTP_PORT: 8080
       SERVICE_GRPC_PORT: 9090
       SERVICE_HEARTBEAT_SECONDS: 15
+      CACHE_REDIS_URL: redis://application-cache:6379/0
+      CACHE_REDIS_SHARDS: ${CACHE_REDIS_SHARDS:-}
+      RULES_CACHE_TTL_SECONDS: ${RULES_CACHE_TTL_SECONDS:-60}
     deploy:
       replicas: 2
     depends_on:
@@ -328,7 +441,7 @@ services:
         condition: service_healthy
 
   university-record-service:
-    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.4.0}
+    image: anastasiatiganescu/university-record-service:${UNIVERSITY_RECORD_VERSION:-v0.5.0}
     environment:
       DB_URL: jdbc:postgresql://university-record-db:5432/record_db
       DB_USERNAME: ${UNIVERSITY_RECORD_DB_USER}
@@ -340,6 +453,8 @@ services:
       SERVICE_HEARTBEAT_SECONDS: 15
       SESSION_CLIENT: grpc
       SESSION_SERVICE_NAME: server-moderation-session-service
+      TRANSACTIONS_ENABLED: ${UNIVERSITY_RECORD_2PC_ENABLED:-false}
+      TRANSACTION_TOKEN: ${UNIVERSITY_RECORD_TRANSACTION_TOKEN:-}
     deploy:
       replicas: 2
     depends_on:
@@ -352,7 +467,7 @@ services:
 
   # ---------------------------------------------------------------- pair 4 (Daniela)
   moderation-service:
-    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.5.0}
+    image: dannacojocari/moderation-service:${MODERATION_VERSION:-v0.6.0}
 
     deploy:
       replicas: 2
@@ -392,7 +507,7 @@ services:
 
 
   discord-dms-service:
-    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.5.0}
+    image: dannacojocari/discord-dms-service:${DISCORD_DMS_VERSION:-v0.6.0}
 
     deploy:
       replicas: 2
@@ -432,6 +547,32 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # Lab 5 application cache. Independent of Discord's Socket.IO Redis below.
+  # Optional at application startup: clients must fall back when it is unavailable.
+  application-cache: &application-cache
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${CACHE_MAXMEMORY:-128mb}
+      - --maxmemory-policy
+      - noeviction
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No host port or persistent volume: cached data is disposable.
+
+  application-cache-2:
+    <<: *application-cache
+    profiles: [cache-sharding]
 
   redis:
     image: redis:7-alpine
@@ -518,6 +659,7 @@ services:
       - loki
 
 volumes:
+  analytics-warehouse-data:
   message-broker-data:
   player-db-data:
   server-moderation-session-db-data:

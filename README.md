@@ -50,8 +50,8 @@ replicas. The Gateway returns this public URL when a client negotiates `GET /ws/
 The Compose defaults for Pair 4 are:
 
 ```text
-MODERATION_VERSION=v0.5.0
-DISCORD_DMS_VERSION=v0.5.0
+MODERATION_VERSION=v0.6.0
+DISCORD_DMS_VERSION=v0.6.0
 DISCOVERY_IMAGE=dannacojocari/pad-team-17-discovery-service:0.2.0
 ```
 
@@ -104,6 +104,46 @@ and [`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team
 Their existing API checks remain useful; dedicated Lab 3 failover and cross-replica tests are
 tracked separately and are not yet presented as passing.
 
+### Private database replication (Lab 5, Grade 5)
+
+The optional [replication overlay](docker-compose.replication.yml) adds two PostgreSQL
+standbys each for Server Rules and University Record, with asynchronous streaming and
+scripted manual failover. The original primary volumes are retained. Read the
+[preparation, backup, enablement and verification procedure](docs/lab5-private-db-replication.md)
+before enabling it; do not replace an existing database with an empty one.
+
+Player and Server Moderation Session use the same overlay with their own
+PostgreSQL 17 clusters. See the [Player and Session runbook](docs/player-session-replication.md)
+for setup, cutover, and failover.
+
+### End-shift two-phase commit (Lab 5, Grade 8)
+
+In `.env`, select images that include 2PC using `GATEWAY_VERSION`,
+`BROKER_VERSION`, `PLAYER_VERSION` and `SERVER_MODERATION_SESSION_VERSION`.
+Set the internal addresses and enable the workflow:
+
+```dotenv
+END_SHIFT_2PC_ENABLED=true
+BROKER_TRANSACTION_ADDRESSES='{"player-service":"player-service:9091","server-moderation-session-service":"server-moderation-session-service:9091"}'
+```
+
+Set three distinct random secrets in `.env` using at least 32 printable
+non-space ASCII characters without commas. `BROKER_GATEWAY_TOKEN` is shared by
+Gateway and Broker. `PLAYER_SERVICE_TRANSACTION_TOKEN` and
+`SERVER_MODERATION_SESSION_SERVICE_TRANSACTION_TOKEN` each match Broker with the
+respective participant. Compose passes these values to the correct services.
+
+Clients still end a shift through Gateway at `POST /sessions/{id}/end`. A
+successful response means the shift closed and Player applied its results.
+Retry that request if the Broker returns `SHIFT_END_PENDING`. The participant
+listeners use the internal Docker network on port `9091`. The same settings
+work with the replication overlay.
+Applicant and Credential use the same overlay with their own PostgreSQL 18 clusters (one primary and
+two asynchronous standbys each, manual failover with fencing). Their data moves from the original
+PostgreSQL 16 databases by dump and restore, with every table's row count compared. See the
+[Applicant and Credential runbook](docs/applicant-credential-replication.md); the live check is
+`bash tests/verify-applicant-credential-replication.sh`.
+
 ### Monitoring: Prometheus, Loki and Grafana (Lab 4)
 
 Grade 10. `docker compose up -d` also starts the monitoring; nothing else is needed.
@@ -112,6 +152,8 @@ Grade 10. `docker compose up -d` also starts the monitoring; nothing else is nee
   collects the metrics every 5 s: `GET /metrics` of the Message Broker and of Service Discovery,
   `GET /actuator/prometheus` of **every replica** of Applicant and Credential, and `GET /metrics` of
   every replica of University Record, Server Rules, Player (port `3000`), and Session (port `3001`).
+  It also scrapes Gateway's `/metrics` on internal port `8000` for Lab 5 authentication-cache
+  counters; this target requires the cache-enabled Gateway image.
   A replicated service is found through Docker's
   DNS - its name resolves to all its replicas - so each replica is collected on its own and shows up as
   its own `instance`. The data is kept for 7 days in `prometheus-data`.
@@ -162,6 +204,69 @@ In *Explore* with Loki, `{service="applicant-service"}` shows the logs of both A
 line with its `container`.
 
 ---
+
+## Data warehouse and ETL (Lab 5, Grade 4)
+
+CPR includes an analytics warehouse, versioned migration job and scheduled Python
+ETL reading selected data from all eight operational databases. Moderation and
+Discord use incremental loading; the other six sources use full snapshots.
+
+See [analytics setup, architecture and verification](docs/lab5-analytics.md).
+Analytics source is tracked separately in `services/analytics`, pinned to the
+released commit; Compose continues to run the published image.
+
+Provision the dedicated reader accounts and configure the analytics environment
+variables before starting the scheduler. The image is the public
+`dannacojocari/pad-team-17-analytics:v0.1.0`; no private-source checkout is needed.
+
+## Application cache (Lab 5, Grade 6)
+
+Compose provisions `application-cache`, a dedicated internal Redis instance. The Gateway (0.6.0)
+keeps verified JWTs in it and Server Rules (v0.5.0) keeps its rule sets there, keyed by version.
+See [setup, architecture and verification](docs/lab5-cache.md).
+
+Server Rules v0.5.0 supports consistent-hash sharding. It is opt-in: start the `cache-sharding`
+profile (which adds `application-cache-2`) and set `CACHE_REDIS_SHARDS` as shown in `.env.example`.
+Gateway 0.6.0 routes its JWT cache over the same `CACHE_REDIS_SHARDS` list when it is set.
+
+## Two-phase commit (Lab 5, Grade 8)
+
+For a workflow that changes several databases, a coordinator in the Message Broker asks each service to
+*prepare* its part, and only when all of them are prepared tells them to *commit*; otherwise it tells them to
+*roll back*. From version 4.2.0, Applicant and Credential implement the participant side for the operations
+`applicant.initialize.v1` and `credential.initialize.v1`: `Prepare`, `Commit`, `Rollback` and `Status` over gRPC
+on port 9091, behind a token, with the Message Broker's contract
+([`proto/transactions.proto`](proto/transactions.proto)) and the prepared state kept in the service's own
+database, so it survives a restart. University Record v0.5.0 also implements
+`university-record.initialize-applicant.v1` on its internal port 9091; CPR passes its token and address through
+with `UNIVERSITY_RECORD_2PC_ENABLED=false` by default. The Broker workflow that calls these participants to
+create an applicant is not wired yet. See
+[the contract and what each participant does](docs/two-phase-commit.md); the live check is
+`bash tests/verify-two-phase-participants.sh`.
+
+## Long-running saga (Lab 5, Grade 9)
+
+"Create an applicant" is also a saga, with its coordinator in the Message Broker: Applicant and Credential
+*execute* their step and commit it at once, and if a later step fails the coordinator *compensates* the earlier ones
+in reverse order (deleting what was created); University Record is the last step, an event that the Broker's
+queue delivers until it is accepted. Nothing is held between the steps, unlike two-phase commit. The participants
+serve `pad.saga.v1.SagaParticipant` ([`proto/saga.proto`](proto/saga.proto)) on the same port 9091 and token. See
+[the flow, the contract and the coordinator's rules](docs/saga.md); the live check of the participants is
+`bash tests/verify-saga-participants.sh`.
+
+To turn it on, set in `.env` (`BROKER_TRANSACTION_ADDRESSES` in `.env.example` already lists both participants):
+
+```dotenv
+CREATE_APPLICANT_SAGA_ENABLED=true
+APPLICANT_SERVICE_TRANSACTION_TOKEN=<32+ printable characters>
+CREDENTIAL_SERVICE_TRANSACTION_TOKEN=<32+ printable characters, another one>
+BROKER_GATEWAY_TOKEN=<32+ printable characters, the same one end shift uses>
+```
+
+Compose gives the Broker both tokens and each service its own as `TRANSACTION_TOKEN`. Clients still call
+`POST /applicants` through the Gateway; with an optional `Idempotency-Key` a retry resumes the same saga. The
+pinned images have the saga (Applicant and Credential 4.2.0, Broker 0.2.0, Gateway 0.6.0); it stays off while the
+flag is `false`, the default in `.env.example`.
 
 ## Service Boundaries
 
@@ -229,6 +334,23 @@ the current session.
 ![Architecture diagram](architecture_diagram.svg)
 
 Arrows point from the service that initiates a call to the service it calls.
+
+What Lab 5 added is in green. Every service database is now a PostgreSQL cluster - a primary and two
+asynchronous standbys, drawn as stacked cylinders - with scripted manual failover. The **application
+cache** is Redis; the Gateway keeps verified JWTs in it and Server Rules keeps its rule sets, keyed by
+version. It is drawn as two shards (`cache-1`, `cache-2`) chosen by consistent hashing, which is the
+opt-in `cache-sharding` setup described under Application cache. The **analytics ETL**
+reads the eight service databases with a read-only `analytics_reader` account every five minutes and
+loads them into the **data warehouse**, a separate PostgreSQL database with its own schema. The
+**transaction coordinators** run inside the Message Broker and keep their state in its SQLite log:
+two-phase commit ends a shift in Server Moderation Session and Player together, and the create-applicant
+saga creates the applicant in Applicant and Credential and compensates them in reverse order if a step
+fails, then tells University Record with an event. They call the services over gRPC on the internal
+port 9091; the Gateway marks the two requests they coordinate, `POST /sessions/{id}/end` and
+`POST /applicants`, with its `X-Gateway-Token`. In purple
+are two components that have been in the system since Lab 3 and were missing from the earlier
+diagrams: the **Traefik** proxy that keeps a browser's Socket.IO connection on one Discord DMs
+replica, and the **Redis** that links the replicas of Discord DMs.
 
 What Lab 4 added is in blue. The Gateway now only checks the JWT and lets through the public
 routes; every request goes on to the **Message Broker**, which sends it to the least loaded healthy
@@ -553,7 +675,7 @@ No other microservice directly accesses the Player Service database.
 
 #### Running this service
 
-The shared CPR Compose stack runs the published `0.4.1` image. From the CPR root, run `docker compose up -d player-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
+The shared CPR Compose stack runs the published `0.5.0` image. From the CPR root, run `docker compose up -d player-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
 
 **Standalone setup**
 
@@ -609,40 +731,52 @@ When running locally, the Player Service is available at `http://localhost:3000`
 
 Guarded endpoints read the caller from the `X-Player-Id` header, which the Gateway sets. When calling the service directly, send that header yourself; otherwise go through the Gateway.
 
-**Running with Docker**
+**Running with Docker in the service repo**
 
-The service and its PostgreSQL database can be started using Docker Compose:
+Player connects directly to a PostgreSQL 17 cluster with one writer and two
+asynchronous standbys. This procedure initializes a **fresh local test cluster**.
+Use a fresh Compose project for disposable data. Set the database credentials and
+`JWT_SECRET` in your local `.env` first.
 
-```bash
-docker compose up --build -d
+From the Player repo in PowerShell:
+
+```powershell
+docker build -t player-postgres:lab5 ./infrastructure/postgres
+$env:PLAYER_DATABASE_IMAGE = 'player-postgres:lab5'
+$env:PLAYER_REPLICATION_PASSWORD = Read-Host 'Password for the local replication account'
 ```
 
-The Player Service is available on the host at `http://localhost:3000`. PostgreSQL is exposed
-on the host at `5432`, with its data stored in the `player_pg_data` named volume so it survives
-container restarts.
+Start the writer first so the standbys have a database to copy.
 
-The published Docker image is:
-
-```
-janetag/player-service:0.4.1
-```
-
-To check the containers:
-
-```bash
-docker compose ps
+```powershell
+docker compose -p player-ha up -d --wait player-db-1
+docker compose -p player-ha up -d --wait player-db-2 player-db-3
+docker compose -p player-ha up -d --build --remove-orphans player-service
+docker compose -p player-ha exec -T player-db-1 sh -c 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT application_name, state, sync_state FROM pg_stat_replication ORDER BY application_name;"'
 ```
 
-To stop the service:
+Expect two rows, for `db-2` and `db-3`, both with state `streaming` and sync state
+`async`. Player is available at `http://127.0.0.1:3300`. For a local API check,
+use this address in the Player Postman collection. Event delivery through the
+Message Broker requires the shared CPR stack.
 
-```bash
-docker compose down
-```
+Use `docker compose -p player-ha stop` to stop the test cluster and keep its
+volumes. This procedure tests initial replication. Failover and rejoining are
+operated separately through the shared deployment. Set `DB_HOSTS` to a comma-separated list of nodes when running against a replicated cluster. Player checks for a writable node when it borrows a connection. Single-database deployments can continue using `DB_HOST`.
 
-The service starts without RabbitMQ. Event delivery requires the custom Message Broker and
-Service Discovery from the CPR stack. The local Compose file exposes gRPC on `localhost:9090`
-for testing; the team deployment should keep that port inside its Docker network.
-`JWT_SECRET` signs login tokens and must match the Gateway configuration.
+The Lab 5 Player image is `janetag/player-service:0.5.0`.
+
+#### End-shift two-phase commit
+
+When CPR enables end-shift 2PC, the Broker sends Player the results calculated
+by Session. Player saves them during `Prepare`, applies them together on
+`Commit`, and discards them on `Rollback`. A repeated commit leaves the
+player's XP and shift counts unchanged.
+
+The internal listener is off by default. To enable the participant, set
+`TRANSACTIONS_ENABLED=true` and a `TRANSACTION_TOKEN` of at least 32 printable
+non-space ASCII characters that matches the Broker's Player token.
+`TRANSACTION_GRPC_ADDRESS` defaults to `0.0.0.0:9091`.
 
 #### Application logs
 
@@ -714,6 +848,9 @@ IDs are never labels. Shared Prometheus scraping is configured separately in CPR
 #### Postman collection
 
 The REST API can be tested using the [Player Postman collection](postman/pad-team-17-player.postman_collection.json). Requests go through the Gateway, so log in first and use the returned token as a Bearer token.
+
+The Gateway `/metrics` check verifies Gateway's authentication cache metrics.
+The Player metrics check goes through the Broker to Player.
 
 ---
 
@@ -803,7 +940,10 @@ If a downstream call fails, the session is put back to `created` and the Moderat
 
 **Errors:** `403 NOT_MODERATOR` if the caller isn't the session's Moderator, `409 SESSION_NOT_ACTIVE` if the session isn't currently active.
 
-Triggers publishing `shift_ended` (below).
+With 2PC enabled through Gateway, success confirms that Session and Player
+both committed. A retry by the same moderator returns the original `200` body.
+With 2PC disabled, Session queues `shift_ended` and an already-ended shift
+returns `409 SESSION_NOT_ACTIVE`.
 
 **Outgoing gRPC calls**
 
@@ -919,7 +1059,7 @@ the existing stale/duplicate-decision checks.
 
 **Events published (custom Message Broker over gRPC)**
 
-`shift_ended` — published when a moderation shift finishes.
+`shift_ended` — published when a moderation shift finishes with end-shift 2PC disabled.
 
 The event is persisted in the `shift_ended_outbox` PostgreSQL table in the same transaction that marks the session as ended.
 
@@ -1042,7 +1182,7 @@ No other microservice directly accesses the Session Service database.
 
 #### Running this service
 
-The shared CPR Compose stack runs the published `0.4.1` image. From the CPR root, run `docker compose up -d server-moderation-session-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
+The shared CPR Compose stack runs the published `0.5.0` image. From the CPR root, run `docker compose up -d server-moderation-session-service` to start the service and its declared dependencies. The team stack keeps the service ports internal and routes client requests through the Gateway on `localhost:8090`.
 
 **Standalone setup**
 
@@ -1111,43 +1251,71 @@ npm run start:dev
 
 When running locally, the Session Service is available at `http://localhost:3001`.
 
-**Running with Docker**
+**Running with Docker in the service repo**
 
-The service and its PostgreSQL database can be started using Docker Compose:
+Session uses a PostgreSQL 17 primary and two asynchronous standbys in its local
+Compose project. The three nodes reuse the same image as Player and keep their
+data in separate Session volumes. Session uses `DB_HOSTS` to find the current
+writer. Single-database setups can still use `DB_HOST`.
 
-```bash
-docker compose up --build -d
+For a fresh local test, set the database credentials in Session's `.env`.
+If the PostgreSQL image has not been built yet, run this from the Player repo:
+
+```powershell
+docker build -t player-postgres:lab5 ./infrastructure/postgres
 ```
+
+Then run these commands from the Session repo. Start the primary first so the
+standbys can copy from it.
+
+```powershell
+$env:SESSION_DATABASE_IMAGE = 'player-postgres:lab5'
+$env:SESSION_REPLICATION_PASSWORD = Read-Host 'Choose a password for Session replication'
+docker compose -p session-ha up -d --wait session-db-1
+docker compose -p session-ha up -d --wait session-db-2 session-db-3
+docker compose -p session-ha up -d --build session-service
+```
+
+Check replication on the initial primary:
+
+```powershell
+'SELECT application_name, state, sync_state FROM pg_stat_replication ORDER BY application_name;' |
+  docker compose -p session-ha exec -T session-db-1 sh -c 'exec psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+Expect `db-2` and `db-3` to show `streaming` and `async`.
+Once Session has finished starting, check `http://127.0.0.1:3301/health`.
+The database ports are internal to Docker Compose.
+
 
 The Session Service uses the team's custom Message Broker instead of RabbitMQ for asynchronous event communication.
 
-When a moderation shift ends, the `shift_ended` event is saved in the PostgreSQL outbox within the same transaction as the session update. A background dispatcher publishes the event to the Message Broker using gRPC.
+With end-shift 2PC disabled, Session saves the `shift_ended` event in the PostgreSQL outbox within the same transaction as the session update. A background dispatcher publishes the event to the Message Broker using gRPC.
 
 If the broker is unavailable, the event remains in the outbox and publication is retried.
 
 For end-to-end communication, the Session Service must run alongside the Message Broker and Service Discovery in the team's shared CPR Docker Compose stack.
 
-The Session Service is available on the host at `http://localhost:3001`. PostgreSQL is exposed
-on the host at `5433`, with its data stored in the `session_pg_data` named volume so it survives
-container restarts.
-
 The published Docker image is:
 
 ```
-janetag/server-moderation-session-service:0.4.1
+janetag/server-moderation-session-service:0.5.0
 ```
 
-To check the containers:
+Use `docker compose -p session-ha ps` to check the containers and
+`docker compose -p session-ha stop` to stop them and keep their data volumes.
 
-```bash
-docker compose ps
-```
+#### End-shift two-phase commit
 
-To stop the service:
+In CPR, `END_SHIFT_2PC_ENABLED=true` routes end-shift through the Broker's
+coordinator. Session reserves the shift during `Prepare`, closes it on
+`Commit`, and releases the reservation on `Rollback`. Player applies the
+results through its own participant.
 
-```bash
-docker compose down
-```
+The internal listener is off by default. To enable the participant, set
+`TRANSACTIONS_ENABLED=true` and a `TRANSACTION_TOKEN` of at least 32 printable
+non-space ASCII characters that matches the Broker's Session token.
+`TRANSACTION_GRPC_ADDRESS` defaults to `0.0.0.0:9091`.
 
 #### Application logs
 
@@ -1242,7 +1410,12 @@ changes.
 
 #### Postman collection
 
-The REST API can be tested using the [Session Postman collection](postman/pad-team-17-server-moderation-session.postman_collection.json).
+The [Session Postman collection](postman/pad-team-17-server-moderation-session.postman_collection.json) uses Gateway. Set its `end_shift_2pc_enabled` variable
+to `true` if CPR has end-shift 2PC enabled. Run **End session** first so the
+retry test can compare the second response with the first one.
+
+The Gateway `/metrics` check verifies Gateway's authentication cache metrics.
+The Session metrics check goes through the Broker to Session.
 
 ---
 
@@ -1282,6 +1455,15 @@ records — never from `deception` itself.
 is not valid JSON, `404 SESSION_NOT_FOUND` if the session does not exist, `409 SESSION_NOT_ACTIVE` if
 it is not running, `503 SESSION_SERVICE_UNAVAILABLE` if Server Moderation Session Service could not be
 asked - see "Shift check and circuit breaker (Lab 3)" below.
+
+**As a saga (Lab 5, Grade 9).** With `CREATE_APPLICANT_SAGA_ENABLED=true` the Message Broker runs this request as
+the create-applicant saga; the request, the `201` body and the errors above stay the same. The client may add the
+header `Idempotency-Key: <string>`: the same key with the same body resumes the same saga instead of creating a
+second applicant. The `201` also carries `X-Saga-Id` (see `GET /sagas/{saga_id}` in the Message Broker), and the
+applicant's credentials already exist when it arrives. Extra errors: `409 CREATE_APPLICANT_FAILED` if a later step
+refused and the applicant was deleted again, `503 CREATE_APPLICANT_PENDING` if the saga did not finish in time
+(retry with the same key), `409 IDEMPOTENCY_KEY_REUSED` if the key was used with another body,
+`502 INVALID_PARTICIPANT_RESPONSE`. See [the create-applicant saga](docs/saga.md).
 
 `GET /applicants/{applicant_id}` - fetch an applicant's profile
 ```json
@@ -1560,7 +1742,7 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-applicant-service:4.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -1579,7 +1761,7 @@ Session replica does not cut the service off from the healthy one.
 
 **Logs (Lab 4):** `GET /logs` downloads the responding replica's log file as an attachment (`?tail=N` returns its last N lines as text). The Gateway has no route to it; through the Message Broker: `curl -OJ localhost:8100/forward/applicant-service/logs`.
 
-**DockerHub:** `kutulin/pad-17-applicant-service:4.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-applicant-service:4.2.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -1871,7 +2053,7 @@ Session replica does not cut the service off from the healthy one.
 ### Running this service
 
 **To run it (no private repo access needed):**
-1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.1.0`
+1. Pull the public image — `docker pull kutulin/pad-17-credential-service:4.2.0`
    (or let the team's Docker Compose file, in this CPR, pull it for you)
 2. Provide the required environment variables (values shared directly within the team, never committed):
    - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
@@ -1890,7 +2072,7 @@ Session replica does not cut the service off from the healthy one.
 
 **Logs (Lab 4):** `GET /logs` downloads the responding replica's log file as an attachment (`?tail=N` returns its last N lines as text). The Gateway has no route to it; through the Message Broker: `curl -OJ localhost:8100/forward/credential-service/logs`.
 
-**DockerHub:** `kutulin/pad-17-credential-service:4.1.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
+**DockerHub:** `kutulin/pad-17-credential-service:4.2.0` (public, `linux/amd64` + `linux/arm64`), published by GitHub Actions on every merge to the service's `main`, together with `latest`
 
 **Schema:** applied by Flyway at startup from versioned migrations in the service's own repository (`src/main/resources/db/migration`), so the database container comes up empty and the service migrates it. The migrations live only there, next to the code that depends on them, so there is one source of truth for the schema.
 
@@ -2308,6 +2490,12 @@ The Moderation Service does not define the rules that determine whether an appli
 
 Moderation stores final decisions and pending `decision_made` events in PostgreSQL within the same transaction. Its outbox worker publishes events to the custom Message Broker over gRPC; unsuccessful publications remain pending for retry. The Message Broker is responsible for dispatching events to subscribers.
 
+The private repository also provides database migrations, asynchronous replication with
+manual failover, and an optional 2PC participant. Participant support on `dev` is separate
+from the published image and from a complete Broker-coordinated workflow. See the
+[service documentation](https://github.com/DannaCojocari/moderation-service/tree/dev) for its configuration
+and verification procedures.
+
 #### Requirements
 
 The service is built with TypeScript, NestJS, TypeORM, PostgreSQL, and gRPC integration with the custom Message Broker. For
@@ -2597,15 +2785,14 @@ No other microservice directly accesses the Moderation Service database.
 
 #### Postman Collection
 
-The CPR collection is
-[`postman/pad-team-17-moderation.postman_collection.json`](postman/pad-team-17-moderation.postman_collection.json).
-Set a moderator login `token`, its `player_id`, an active test `session_id`, and its current
-`applicant_id` with initialized credentials and university record. Use Gateway at
-`base_url=http://localhost:8090`. The collection checks unauthenticated/invalid submissions,
-creates one final decision, reads it, and checks duplicate/edit/delete rejection.
-It captures `decision_id`. A run submits a real verdict: use a fresh test applicant for each run.
-A successful submission does not prove that Session consumed its event or updated its score.
-Run against the updated service release; merging CPR collections does not deploy service code.
+The [CPR collection](postman/pad-team-17-moderation.postman_collection.json) runs through Gateway.
+Its setup creates fresh test players, obtains tokens, starts a session, and waits for the
+required data. Run the collection from the beginning rather than entering tokens and IDs
+manually. It covers submitting and reading a final decision, including rejection checks.
+
+Monitoring is optional. Discovery checks are in a manual folder, skipped by default.
+The collections retain test accounts and sessions for inspection. These HTTP checks do
+not establish database failover, distributed transaction completion, or Socket.IO delivery.
 
 #### Lab 3 integration notes
 
@@ -2628,6 +2815,12 @@ The Discord DMs Service manages communication between moderators and junior mode
 The service provides REST endpoints for channel and message management and uses Socket.IO for real-time communication. Channel and message data is persisted in PostgreSQL.
 
 The service transports messages between players but does not determine whether the information contained in a message is correct.
+
+The private repository also provides database migrations, asynchronous replication with
+manual failover, and an optional 2PC participant. Participant support on `dev` is separate
+from the published image and from a complete Broker-coordinated workflow. See the
+[service documentation](https://github.com/DannaCojocari/discord-dms-service/tree/dev) for its configuration
+and verification procedures.
 
 #### Requirements
 
@@ -2894,26 +3087,17 @@ No other microservice directly accesses the Discord DMs database.
 
 #### Postman Collection
 
-The CPR collection is
-[`postman/pad-team-17-discord-dms.postman_collection.json`](postman/pad-team-17-discord-dms.postman_collection.json).
-Set a real login `token`, its `player_id`, and test `session_id`. Start the session through
-Session Service and set `channel_id` to one of its provisioned channels containing that player.
-Run Channels then Messages. Public channel creation, update and deletion must return 403;
-REST provisioning must return 410. Message tests create, edit and delete their own test message.
-Provisioned channels remain in place. These expectations require the Discord REST permissions
-release; do not run the mutation checks against an older deployment.
-Channel lists include only memberships; message reads/sends require membership, and message
-edits/deletes require authorship as well. The collection is a smoke test, not proof of every
-cross-player denial; the service's HTTP permission suite covers those cases with test doubles.
-Health requests use `discord_proxy_url=http://localhost:8086`; REST requests use Gateway on 8090.
-Discovery checks are optional: `discovery_url` has no default because CPR does not publish it.
-Set a reachable internal or explicitly forwarded address. Restart recovery requires a manual
-Discovery restart between the baseline and recovery requests.
+The [CPR collection](postman/pad-team-17-discord-dms.postman_collection.json) runs through Gateway.
+Its setup creates fresh test players, obtains tokens, starts a session, and waits for the
+required data. Run the collection from the beginning rather than entering tokens and IDs
+manually. It covers channel access and message creation, reading, editing, and deletion.
 
-The HTTP collection does not exercise live Socket.IO connections. For separate socket tests,
-pass each player's login JWT using `auth: { token }`, use a shared channel containing both
-players, emit `join_channel`, then send and receive a message. Use distinct replica connections
-to establish cross-replica delivery. Reverify this after deploying the authentication changes.
+Monitoring is optional. Discovery checks are in a manual folder, skipped by default.
+The collections retain test accounts and sessions for inspection. These HTTP checks do
+not establish database failover, distributed transaction completion, or Socket.IO delivery.
+
+Channel mutations and legacy provisioning are internal operations; Gateway rejects
+these public requests with `404`.
 
 #### Lab 3 integration notes
 
@@ -3106,6 +3290,27 @@ now publishes through the broker, so RabbitMQ is no longer part of the Compose f
 dead letters does not retry or remove them. The durable queue, dead letters included, is the SQLite
 file `EVENT_DB_PATH`, which Compose keeps in the `message-broker-data` volume.
 
+**Sagas (Lab 5, Grade 9)**
+
+```json
+// GET /sagas/{saga_id} - the X-Saga-Id of a POST /applicants that ran as a saga
+{
+  "saga_id": "uuid",
+  "workflow": "create_applicant",
+  "state": "RUNNING | COMPENSATING | COMPLETED | COMPENSATED",
+  "failure": "string | null",
+  "steps": [
+    { "service": "applicant-service", "operation": "applicant.create.v1", "kind": "compensable", "state": "DONE" },
+    { "service": "credential-service", "operation": "credential.create.v1", "kind": "compensable", "state": "DONE" },
+    { "service": "university-record-service", "operation": "university-record.applicant-initialized.v1",
+      "kind": "retriable", "state": "DONE" }
+  ]
+}
+```
+A step is `PENDING`, `STARTED`, `DONE`, `FAILED` or `COMPENSATED`; what a step returned is never shown.
+Errors: `404 SAGA_NOT_FOUND`, `503 STORAGE_UNAVAILABLE`. The sagas are in the same SQLite file as the
+queue. See [the create-applicant saga](docs/saga.md).
+
 **Logs and metrics**
 
 `GET /logs` downloads the broker's log file (`?tail=100` returns the last 100 lines). `GET /metrics`
@@ -3255,3 +3460,7 @@ claiming authenticated socket access; these Compose changes alone do not authent
 
 Keep the application service ports internal. Restricting proxy paths closes the direct public
 REST bypass; resource-level checks inside the service remain necessary for authenticated users.
+
+## Private database replication
+
+Moderation and Discord DMs have an opt-in PostgreSQL replication overlay with two standbys each. See [the deployment and recovery runbook](docs/database-replication.md) for published-image requirements, backup/restore into new volumes, application and ETL routing, failover, and rollback boundaries. The original database volumes are retained during cutover.

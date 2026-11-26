@@ -1,0 +1,55 @@
+name: Verify private database replication
+
+on:
+  workflow_dispatch:
+    inputs:
+      moderation_app_image:
+        description: Released Moderation application image with explicit tag or digest
+        required: true
+        type: string
+      moderation_database_image:
+        description: Released Moderation PostgreSQL wrapper image
+        required: true
+        type: string
+      discord_app_image:
+        description: Released Discord DMs application image with explicit tag or digest
+        required: true
+        type: string
+      discord_database_image:
+        description: Released Discord DMs PostgreSQL wrapper image
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TEST_MODERATION_APP_IMAGE: ${{ inputs.moderation_app_image }}
+      TEST_MODERATION_DATABASE_IMAGE: ${{ inputs.moderation_database_image }}
+      TEST_DISCORD_APP_IMAGE: ${{ inputs.discord_app_image }}
+      TEST_DISCORD_DATABASE_IMAGE: ${{ inputs.discord_database_image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize only the shared analytics submodule
+        run: git submodule update --init services/analytics
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate combined replication configuration
+        run: node tests/verify-replication-config.mjs
+      - name: Pull the specified releases
+        run: |
+          docker pull "$TEST_MODERATION_APP_IMAGE"
+          docker pull "$TEST_MODERATION_DATABASE_IMAGE"
+          docker pull "$TEST_DISCORD_APP_IMAGE"
+          docker pull "$TEST_DISCORD_DATABASE_IMAGE"
+      - name: Verify restore and failover integration
+        run: node tests/verify-replication-integration.mjs
+      - name: Verify rollback before activation
+        run: node tests/verify-replication-integration.mjs
+        env:
+          TEST_ROLLBACK_ONLY: '1'

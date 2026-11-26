@@ -1256,17 +1256,10 @@
 					]
 				},
 				{
-					"name": "Gateway blocks internal /metrics",
+					"name": "Gateway authentication cache metrics",
 					"request": {
 						"auth": {
-							"type": "bearer",
-							"bearer": [
-								{
-									"key": "token",
-									"value": "{{token}}",
-									"type": "string"
-								}
-							]
+							"type": "noauth"
 						},
 						"method": "GET",
 						"header": [],
@@ -1279,7 +1272,7 @@
 								"metrics"
 							]
 						},
-						"description": "Public user tokens must not expose operational endpoints."
+						"description": "Gateway exposes its own authentication metrics. The service metrics are checked separately through the Broker."
 					},
 					"event": [
 						{
@@ -1287,7 +1280,13 @@
 							"script": {
 								"type": "text/javascript",
 								"exec": [
-									"pm.test(\"Gateway does not expose this operational route\", () => pm.response.to.have.status(404));"
+									"pm.test(\"Returns Gateway metrics\", () => {",
+									"  pm.response.to.have.status(200);",
+									"  pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/plain\");",
+									"  const text = pm.response.text();",
+									"  pm.expect(text).to.include(\"# TYPE gateway_auth_cache_lookups_total counter\");",
+									"  pm.expect(text).to.include('gateway_jwt_verifications_total{service=\"gateway\"}');",
+									"});"
 								]
 							}
 						}

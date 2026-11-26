@@ -1,8 +1,8 @@
 {
   "info": {
-    "name": "Moderation \u2014 Final decision regression",
+    "name": "moderation-service \u2014 Automated Gateway regression",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Run against the updated Moderation release through Gateway. Set token to a real moderator login JWT, player_id to its UUID, session_id to an active session and applicant_id to its current applicant with initialized credentials/record. Choose verdict deliberately: this run submits one real, irreversible verdict and may change score/advance the applicant. Use a dedicated test session and fresh applicant each run. These checks do not prove Session role authorization or event consumption. A 201 means decision and event are stored, not that Session has updated its score. Do not put tokens in committed collections."
+    "description": "Run the entire collection through Gateway with all game services healthy. Setup creates fresh moderator/junior accounts and an active test session on every iteration, obtains JWTs, and waits for required data. Tokens and IDs are generated at runtime; do not commit exported runtime values. Moderation submits a real final verdict; test accounts/session are intentionally retained for inspection. Set enable_monitoring=true to include Prometheus checks. The manual Discovery folder is skipped by default. To use it, set enable_manual_discovery=true and discovery_url, then send its requests individually, restarting Discovery between the capture and recovery requests. Set enable_manual_discovery=false before running the whole collection. This is HTTP regression coverage, not proof of 2PC, failover or Socket.IO behavior. Use Newman 6.2.1 or a current Postman runner; run with --bail for immediate assertion failures."
   },
   "auth": {
     "type": "bearer",
@@ -17,28 +17,27 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8090",
-      "description": ""
+      "value": "http://localhost:8090"
     },
     {
       "key": "token",
       "value": "",
-      "description": ""
+      "description": "Generated during this collection run; leave empty in source control."
     },
     {
       "key": "player_id",
       "value": "",
-      "description": ""
+      "description": "Generated during this collection run; leave empty in source control."
     },
     {
       "key": "session_id",
       "value": "",
-      "description": ""
+      "description": "Generated during this collection run; leave empty in source control."
     },
     {
       "key": "applicant_id",
       "value": "",
-      "description": ""
+      "description": "Generated during this collection run; leave empty in source control."
     },
     {
       "key": "verdict",
@@ -48,7 +47,7 @@
     {
       "key": "decision_id",
       "value": "",
-      "description": ""
+      "description": "Generated during this collection run; leave empty in source control."
     },
     {
       "key": "prometheus_url",
@@ -63,202 +62,741 @@
     {
       "key": "moderation_success_baseline",
       "value": "",
-      "description": "Captured by the Lab 4 publication baseline request."
+      "description": "Generated during this collection run; leave empty in source control."
+    },
+    {
+      "key": "token_junior",
+      "value": "",
+      "description": "Generated during this collection run; leave empty in source control."
+    },
+    {
+      "key": "run_id",
+      "value": "",
+      "description": "Generated during this collection run; leave empty in source control."
+    },
+    {
+      "key": "enable_monitoring",
+      "value": "false"
+    },
+    {
+      "key": "discovery_url",
+      "value": "",
+      "type": "string",
+      "description": "Host-local Discovery URL, forwarded from CPR container; not published by default."
+    },
+    {
+      "key": "expected_replicas",
+      "value": "2",
+      "type": "string",
+      "description": "Expected healthy replicas in CPR; set to 1 for a standalone service."
+    },
+    {
+      "key": "baseline_instance_ids",
+      "value": "",
+      "type": "string",
+      "description": "Internal snapshot saved by the baseline request; used to verify recovery."
+    },
+    {
+      "key": "instance_1_id",
+      "value": "",
+      "type": "string",
+      "description": "Set from first registered instance in the Discovery replica check."
+    },
+    {
+      "key": "instance_2_id",
+      "value": "",
+      "type": "string",
+      "description": "Set from second registered instance in the Discovery replica check."
+    },
+    {
+      "key": "instance_1_host",
+      "value": "",
+      "type": "string",
+      "description": "Set from first registered instance in the Discovery replica check."
+    },
+    {
+      "key": "instance_2_host",
+      "value": "",
+      "type": "string",
+      "description": "Set from second registered instance in the Discovery replica check."
+    },
+    {
+      "key": "enable_manual_discovery",
+      "value": "false",
+      "description": "Opt in only when sending manual Discovery requests individually. Keep false for unattended collection runs."
+    },
+    {
+      "key": "moderation_health_url",
+      "value": "",
+      "description": "Explicitly reachable Moderation HTTP base URL for the manual health request; Gateway does not expose this internal health route."
     }
   ],
   "item": [
     {
-      "name": "Reject unauthenticated submission",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"accept\"\n}"
+      "name": "0. Setup",
+      "item": [
+        {
+          "name": "Register moderator",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/players",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\": \"modermod{{run_id}}\", \"email\": \"moderation.moderator.{{run_id}}@example.com\", \"password\": \"PostmanLab5!2026\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const run = pm.variables.replaceIn('{{$guid}}').replace(/-/g, '').slice(0,12);",
+                  "pm.collectionVariables.set('run_id',run);",
+                  "pm.variables.set('run_id',run);",
+                  "['token','token_junior','player_id','session_id','applicant_id','channel_id','message_id','decision_id','moderation_success_baseline','discord_dms_rest_message_baseline'].forEach(key => { pm.collectionVariables.unset(key); pm.variables.set(key,''); });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 201;",
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " ",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
-        "auth": {
-          "type": "noauth"
+        {
+          "name": "Login moderator",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/players/login",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"moderation.moderator.{{run_id}}@example.com\", \"password\": \"PostmanLab5!2026\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 200;",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " const body=pm.response.json(); pm.expect(body.token).to.be.a('string').and.not.empty; pm.collectionVariables.set('token',body.token); pm.variables.set('token',body.token); const claims=JSON.parse(atob(body.token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); pm.expect(claims.sub).to.be.a('string').and.not.empty; pm.collectionVariables.set('player_id',claims.sub); pm.variables.set('player_id',claims.sub);",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register junior",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/players",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\": \"moderjun{{run_id}}\", \"email\": \"moderation.junior.{{run_id}}@example.com\", \"password\": \"PostmanLab5!2026\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 201;",
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " ",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login junior",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/players/login",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"moderation.junior.{{run_id}}@example.com\", \"password\": \"PostmanLab5!2026\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 200;",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " const body=pm.response.json(); pm.expect(body.token).to.be.a('string').and.not.empty; pm.collectionVariables.set('token_junior',body.token); pm.variables.set('token_junior',body.token);",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Open session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "moderation-{{run_id}}"
+              }
+            ],
+            "url": "{{base_url}}/sessions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 201;",
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " const b=pm.response.json(); pm.expect(b.session_id).to.be.a('string').and.not.empty; pm.collectionVariables.set('session_id',b.session_id); pm.variables.set('session_id',b.session_id);",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Junior joins session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/sessions/{{session_id}}/join",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 200;",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " ",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Start session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{base_url}}/sessions/{{session_id}}/start",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let valid = pm.response.code === 200;",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "try {",
+                  " if (!valid) throw new Error('Setup request failed');",
+                  " pm.expect(pm.response.json().status).to.eql('active');",
+                  "} catch (error) {",
+                  " pm.test('Setup response is valid', () => { throw error; });",
+                  " pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wait for current applicant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/sessions/{{session_id}}/current-applicant",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const attempts = 20;",
+                  "let count = 1;",
+                  "function inspect(response) {",
+                  " let body; try { body = response.json(); } catch (_) {}",
+                  " const ready = response && response.code === 200 && body && (typeof body.applicant_id === 'string' && body.applicant_id.length > 0);",
+                  " if (ready) { pm.collectionVariables.set('applicant_id',body.applicant_id); pm.variables.set('applicant_id',body.applicant_id); pm.test('Required data became ready', () => pm.expect(ready).to.be.ok); return; }",
+                  " if (count >= attempts || (response && [400,401,403].includes(response.code))) {",
+                  "   pm.test('Required data became ready', () => pm.expect(Boolean(ready), 'Setup readiness failed; check upstream services').to.eql(true));",
+                  "   pm.execution.setNextRequest(null); return;",
+                  " }",
+                  " count++;",
+                  " setTimeout(() => pm.sendRequest({url:pm.variables.replaceIn(pm.request.url.toString()), method:'GET', header:{Authorization:'Bearer '+pm.variables.get('token')}}, (error, next) => inspect(error ? null : next)), 1000);",
+                  "}",
+                  "inspect(pm.response);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wait for credentials",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/credentials/{{applicant_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const attempts = 20;",
+                  "let count = 1;",
+                  "function inspect(response) {",
+                  " let body; try { body = response.json(); } catch (_) {}",
+                  " const ready = response && response.code === 200 && body && (body.applicant_id === pm.variables.get('applicant_id'));",
+                  " if (ready) { ; pm.test('Required data became ready', () => pm.expect(ready).to.be.ok); return; }",
+                  " if (count >= attempts || (response && [400,401,403].includes(response.code))) {",
+                  "   pm.test('Required data became ready', () => pm.expect(Boolean(ready), 'Setup readiness failed; check upstream services').to.eql(true));",
+                  "   pm.execution.setNextRequest(null); return;",
+                  " }",
+                  " count++;",
+                  " setTimeout(() => pm.sendRequest({url:pm.variables.replaceIn(pm.request.url.toString()), method:'GET', header:{Authorization:'Bearer '+pm.variables.get('token')}}, (error, next) => inspect(error ? null : next)), 1000);",
+                  "}",
+                  "inspect(pm.response);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wait for university record",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/sessions/{{session_id}}/records/{{applicant_id}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token_junior}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const attempts = 20;",
+                  "let count = 1;",
+                  "function inspect(response) {",
+                  " let body; try { body = response.json(); } catch (_) {}",
+                  " const ready = response && response.code === 200 && body && (typeof body === 'object');",
+                  " if (ready) { ; pm.test('Required data became ready', () => pm.expect(ready).to.be.ok); return; }",
+                  " if (count >= attempts || (response && [400,401,403].includes(response.code))) {",
+                  "   pm.test('Required data became ready', () => pm.expect(Boolean(ready), 'Setup readiness failed; check upstream services').to.eql(true));",
+                  "   pm.execution.setNextRequest(null); return;",
+                  " }",
+                  " count++;",
+                  " setTimeout(() => pm.sendRequest({url:pm.variables.replaceIn(pm.request.url.toString()), method:'GET', header:{Authorization:'Bearer '+pm.variables.get('token_junior')}}, (error, next) => inspect(error ? null : next)), 1000);",
+                  "}",
+                  "inspect(pm.response);"
+                ]
+              }
+            }
+          ]
         }
-      },
+      ]
+    },
+    {
+      "name": "1. Optional monitoring baseline",
+      "item": [
+        {
+          "name": "04. Capture Moderation broker success baseline",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{prometheus_url}}/api/v1/query?query=sum%28moderation_event_publications_total%7Bjob%3D%22moderation-service%22%2Cresult%3D%22success%22%7D%29",
+            "description": "Run BEFORE the existing irreversible \"Submit one final decision\" request. Saves the success counter baseline."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Prometheus returned a successful query', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('success');",
+                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
+                  "});",
+                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
+                  "  const result = pm.response.json().data.result;",
+                  "  pm.test('Publication counter exists', () => pm.expect(result.length).to.eql(1));",
+                  "  if (result.length === 1) {",
+                  "    const value = Number(result[0].value[1]);",
+                  "    pm.test('Publication counter is non-negative', () => pm.expect(value).to.be.at.least(0));",
+                  "    pm.collectionVariables.set('moderation_success_baseline', String(value));",
+                  "    console.log('Saved Moderation broker publication baseline:', value);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ],
       "event": [
         {
-          "listen": "test",
+          "listen": "prerequest",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+              "if (String(pm.variables.get('enable_monitoring')) !== 'true') pm.execution.skipRequest();"
             ]
           }
         }
       ]
     },
     {
-      "name": "Reject invalid verdict",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"invalid\"\n}"
-        }
-      },
-      "event": [
+      "name": "2. Functional regression",
+      "item": [
         {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
-            ]
-          }
+          "name": "Reject unauthenticated submission",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verdict\": \"accept\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject invalid verdict",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verdict\": \"invalid\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Submit one final decision",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verdict\": \"{{verdict}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) {",
+                  "  const b = pm.response.json();",
+                  "  pm.collectionVariables.set('decision_id', b.id); pm.variables.set('decision_id', b.id);",
+                  "  pm.test('Authenticated moderator persisted', () => pm.expect(b.moderator_id).to.eql(pm.variables.get('player_id')));",
+                  "  pm.test('Correct session and applicant', () => { pm.expect(b.session_id).to.eql(pm.variables.get('session_id')); pm.expect(b.applicant_id).to.eql(pm.variables.get('applicant_id')); });",
+                  "  pm.test('Requested verdict persisted', () => pm.expect(b.verdict).to.eql(pm.variables.get('verdict')));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read saved decision",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/decisions/{{decision_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Saved decision returned', () => pm.expect(pm.response.json().id).to.eql(pm.variables.get('decision_id')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject duplicate decision",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verdict\": \"{{verdict}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject revision of final decision",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/decisions/{{decision_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verdict\": \"reject\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject deletion of final decision",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{base_url}}/decisions/{{decision_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "name": "Submit one final decision",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"{{verdict}}\"\n}"
-        }
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
-              "if (pm.response.code === 201) {",
-              "  const b = pm.response.json();",
-              "  pm.collectionVariables.set('decision_id', b.id);",
-              "  pm.test('Authenticated moderator persisted', () => pm.expect(b.moderator_id).to.eql(pm.variables.get('player_id')));",
-              "  pm.test('Correct session and applicant', () => { pm.expect(b.session_id).to.eql(pm.variables.get('session_id')); pm.expect(b.applicant_id).to.eql(pm.variables.get('applicant_id')); });",
-              "  pm.test('Requested verdict persisted', () => pm.expect(b.verdict).to.eql(pm.variables.get('verdict')));",
-              "}"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Read saved decision",
-      "request": {
-        "method": "GET",
-        "header": [],
-        "url": "{{base_url}}/decisions/{{decision_id}}"
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
-              "pm.test('Saved decision returned', () => pm.expect(pm.response.json().id).to.eql(pm.variables.get('decision_id')));"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Reject duplicate decision",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{base_url}}/sessions/{{session_id}}/applicants/{{applicant_id}}/decision",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"{{verdict}}\"\n}"
-        }
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Reject revision of final decision",
-      "request": {
-        "method": "PATCH",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": "{{base_url}}/decisions/{{decision_id}}",
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"verdict\": \"reject\"\n}"
-        }
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Reject deletion of final decision",
-      "request": {
-        "method": "DELETE",
-        "header": [],
-        "url": "{{base_url}}/decisions/{{decision_id}}"
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "Lab 4 - Moderation observability and broker publication",
-      "description": "Checks exclusively Moderation metrics collected by CPR Prometheus. No Session, DMs, Player, Applicant or Credential service requests are changed. Requires CPR Prometheus running at {{prometheus_url}}, with the Moderation scrape job installed and a published Moderation image that exposes /metrics. For event verification, first run request 04 to capture the success baseline; then run the existing \"Submit one final decision\" request with a fresh applicant and real moderator JWT (this is irreversible); wait at least two Prometheus scrape intervals (typically 15-20 seconds) and run request 05. This only confirms a broker publication was acknowledged, not delivery or consumption by another service. Do not use the collection runner to treat the requests as a single automated end-to-end test, because the baseline capture must occur before the original decision submission.",
+      "name": "3. Optional monitoring verification",
+      "description": "Opt in with enable_monitoring=true. Baseline is captured before functional requests. Counters are aggregate observations and do not prove event consumption.",
       "item": [
         {
           "name": "01. Moderation replica scrape status",
@@ -368,43 +906,6 @@
           ]
         },
         {
-          "name": "04. Capture Moderation broker success baseline",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "header": [],
-            "url": "{{prometheus_url}}/api/v1/query?query=sum%28moderation_event_publications_total%7Bjob%3D%22moderation-service%22%2Cresult%3D%22success%22%7D%29",
-            "description": "Run BEFORE the existing irreversible \"Submit one final decision\" request. Saves the success counter baseline."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Prometheus returned a successful query', () => {",
-                  "  pm.response.to.have.status(200);",
-                  "  pm.expect(pm.response.json().status).to.eql('success');",
-                  "  pm.expect(pm.response.json().data.resultType).to.eql('vector');",
-                  "});",
-                  "if (pm.response.code === 200 && pm.response.json().status === 'success') {",
-                  "  const result = pm.response.json().data.result;",
-                  "  pm.test('Publication counter exists', () => pm.expect(result.length).to.eql(1));",
-                  "  if (result.length === 1) {",
-                  "    const value = Number(result[0].value[1]);",
-                  "    pm.test('Publication counter is non-negative', () => pm.expect(value).to.be.at.least(0));",
-                  "    pm.collectionVariables.set('moderation_success_baseline', String(value));",
-                  "    console.log('Saved Moderation broker publication baseline:', value);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ]
-        },
-        {
           "name": "05. Verify Moderation broker success counter increased",
           "request": {
             "auth": {
@@ -470,6 +971,231 @@
               }
             }
           ]
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (String(pm.variables.get('enable_monitoring')) !== 'true') pm.execution.skipRequest();"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Manual Discovery checks (skipped by default)",
+      "description": "Set enable_manual_discovery=true and a reachable discovery_url. Send each request individually: capture instance IDs, restart Discovery yourself, wait for heartbeats and health checks, then verify recovery. This folder does not restart containers. Restore enable_manual_discovery=false before an unattended run.",
+      "auth": {
+        "type": "noauth"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (String(pm.variables.get('enable_manual_discovery')) !== 'true') pm.execution.skipRequest();"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "1. Service HTTP Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Health HTTP status is 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test('Service reports UP', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.be.an('object');",
+                  "    pm.expect(body.status).to.eql('UP');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{moderation_health_url}}/health",
+            "description": "Direct service health check; with base_url pointed at a Gateway this could check the Gateway instead. Use a direct instance URL if you need the actual service health endpoint.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "2. Discovery HTTP Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery health HTTP status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/health",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Checks Discovery itself. Requires temporary localhost port mapping (see collection description).",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "3. Verify Registered Replicas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  const instances = pm.response.json();",
+                  "  const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "  pm.test('Response is an instance array', () => pm.expect(instances).to.be.an('array'));",
+                  "  if (Array.isArray(instances)) {",
+                  "    pm.test('Expected instance count', () => pm.expect(instances.length).to.eql(expected));",
+                  "    pm.test('Instances have unique IDs and addresses', () => {",
+                  "      pm.expect(new Set(instances.map(x => x.instance_id)).size).to.eql(instances.length);",
+                  "      pm.expect(new Set(instances.map(x => x.host)).size).to.eql(instances.length);",
+                  "    });",
+                  "    pm.test('Every instance belongs to the service and is healthy', () => {",
+                  "      instances.forEach(x => { pm.expect(x.service_name).to.eql('moderation-service'); pm.expect(x.healthy).to.eql(true); pm.expect(x.health.status).to.eql('UP'); });",
+                  "    });",
+                  "    if (instances[0]) { pm.collectionVariables.set('instance_1_id', instances[0].instance_id); pm.collectionVariables.set('instance_1_host', instances[0].host); }",
+                  "    if (instances[1]) { pm.collectionVariables.set('instance_2_id', instances[1].instance_id); pm.collectionVariables.set('instance_2_host', instances[1].host); }",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/moderation-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "moderation-service"
+              ]
+            },
+            "description": "Checks moderation-service appears with exactly expected_replicas distinct, healthy instances. Set expected_replicas=1 for a standalone test; in CPR Lab 3 it should be 2. Health may take several seconds to become UP after startup/restart.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "4. Capture IDs Before Discovery Restart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) {",
+                  "  const instances = pm.response.json();",
+                  "  const expected = Number(pm.collectionVariables.get('expected_replicas') || 2);",
+                  "  pm.test('Baseline has expected number of healthy replicas', () => {",
+                  "    pm.expect(instances).to.be.an('array').with.lengthOf(expected);",
+                  "    instances.forEach(x => pm.expect(x.healthy).to.eql(true));",
+                  "  });",
+                  "  if (Array.isArray(instances) && instances.length === expected && instances.every(x => x.healthy)) {",
+                  "    pm.collectionVariables.set('baseline_instance_ids', JSON.stringify(instances.map(x => x.instance_id).sort()));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/moderation-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "moderation-service"
+              ]
+            },
+            "description": "Run once while two instances are healthy, BEFORE restarting Discovery. Saves sorted instance IDs to baseline_instance_ids for subsequent recovery check.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "5. Verify IDs After Discovery Restart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Discovery responds with 200', () => pm.response.to.have.status(200));",
+                  "const baselineRaw = pm.collectionVariables.get('baseline_instance_ids');",
+                  "pm.test('Baseline was captured first', () => pm.expect(baselineRaw, 'Run request 4 before restarting Discovery').to.be.a('string').and.not.empty);",
+                  "if (pm.response.code === 200 && baselineRaw) {",
+                  "  const instances = pm.response.json();",
+                  "  const originalIds = JSON.parse(baselineRaw);",
+                  "  const currentIds = instances.map(x => x.instance_id).sort();",
+                  "  pm.test('Original instances re-register after Discovery restart', () => pm.expect(currentIds).to.deep.eql(originalIds));",
+                  "  pm.test('Recovered instances are healthy', () => instances.forEach(x => { pm.expect(x.healthy).to.eql(true); pm.expect(x.health.status).to.eql('UP'); }));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{discovery_url}}/services/moderation-service",
+              "host": [
+                "{{discovery_url}}"
+              ],
+              "path": [
+                "services",
+                "moderation-service"
+              ]
+            },
+            "description": "Restart ONLY Discovery outside Postman (docker compose restart discovery-service), allow at least one 15-second heartbeat plus health check, then send this request. Compares the current healthy instance IDs with the captured baseline; no container restart should be necessary.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
         }
       ]
     }

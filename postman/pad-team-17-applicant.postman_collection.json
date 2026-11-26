@@ -622,7 +622,7 @@
             "applicants?session_id={{session_id}}"
           ]
         },
-        "description": "Lab 3. The team's Compose file runs two Applicant Service replicas, and the Gateway alternates between them. Every response names the replica that answered in the X-Instance-Id header; this request remembers it."
+        "description": "Lab 3, Lab 4. The team's Compose file runs two Applicant Service replicas. The Message Broker sends each request to the least loaded one (its open requests, then the utilization Service Discovery measured, every 5 s), and equally loaded replicas take turns. Every response names the replica that answered in the X-Instance-Id header; this request remembers it."
       },
       "response": [],
       "event": [
@@ -643,7 +643,7 @@
       ]
     },
     {
-      "name": "Round-robin - next request goes to the other replica",
+      "name": "Round-robin - the other replica answers too",
       "request": {
         "method": "GET",
         "header": [],
@@ -656,21 +656,41 @@
             "applicants?session_id={{session_id}}"
           ]
         },
-        "description": "Sent right after the previous request, so the Gateway's round-robin hands it to the other replica. Needs both replicas registered and healthy in Service Discovery."
+        "description": "A replica that was busy at the last Discovery check is passed over until the next one, so the same replica can answer a few requests in a row. This request is sent again, 1 s apart, until the other replica answers: at most 10 times, longer than one 5 s Discovery check plus the Broker's 2 s cache of the replica list. Needs both replicas registered and healthy in Service Discovery."
       },
       "response": [],
       "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// A repeated try waits 1 s, so Service Discovery can measure the replicas again.",
+              "if (Number(pm.collectionVariables.get('round_robin_tries') || 0) > 0) {",
+              "  setTimeout(() => {}, 1000);",
+              "}"
+            ]
+          }
+        },
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "pm.test('answered by the other replica', () => {",
-              "  const instance = pm.response.headers.get('X-Instance-Id');",
-              "  pm.expect(instance).to.be.a('string').and.not.be.empty;",
-              "  pm.expect(instance).to.not.eql(pm.collectionVariables.get('first_instance'));",
-              "});"
+              "const instance = pm.response.headers.get('X-Instance-Id');",
+              "const tries = Number(pm.collectionVariables.get('round_robin_tries') || 0) + 1;",
+              "const sameReplica = pm.response.code === 200 && instance === pm.collectionVariables.get('first_instance');",
+              "if (sameReplica && tries < 10) {",
+              "  pm.collectionVariables.set('round_robin_tries', String(tries));",
+              "  pm.execution.setNextRequest(pm.info.requestName);",
+              "} else {",
+              "  pm.collectionVariables.set('round_robin_tries', '0');",
+              "  pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "  pm.test(`answered by the other replica (try ${tries} of 10)`, () => {",
+              "    pm.expect(instance).to.be.a('string').and.not.be.empty;",
+              "    pm.expect(instance).to.not.eql(pm.collectionVariables.get('first_instance'));",
+              "  });",
+              "}"
             ]
           }
         }
@@ -710,6 +730,541 @@
           }
         }
       ]
+    },
+    {
+      "name": "Lab 5 Grade 9 - create-applicant saga",
+      "description": "Run the shift requests at the top of this collection first. With CREATE_APPLICANT_SAGA_ENABLED=true (see \"Long-running saga\" in the README) the Broker runs POST /applicants as a saga and its 201 carries X-Saga-Id; the saga checks run only then. Without the flag they are skipped and the plain Applicant answers. The last request reads the saga straight from the Broker at {{broker_url}}.",
+      "item": [
+        {
+          "name": "Saga - create an applicant with an Idempotency-Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{saga_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "With the saga on, the Broker runs this request as the create-applicant saga (Applicant, Credential, University Record) and the 201 carries X-Saga-Id. A 503 CREATE_APPLICANT_PENDING means the saga goes on in the Broker: the request is sent again with the same key, at most 3 times, and resumes the same saga.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A new key starts a new saga; a retry after a 503 keeps the key.",
+                  "if (!Number(pm.collectionVariables.get('saga_attempts') || 0)) {",
+                  "  pm.collectionVariables.set('saga_key', pm.variables.replaceIn('{{$guid}}'));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const attempts = Number(pm.collectionVariables.get('saga_attempts') || 0);",
+                  "if (pm.response.code === 503 && attempts < 3) {",
+                  "  // CREATE_APPLICANT_PENDING: the same key picks up the same saga.",
+                  "  pm.collectionVariables.set('saga_attempts', String(attempts + 1));",
+                  "  pm.execution.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set('saga_attempts', '0');",
+                  "  const sagaId = pm.response.headers.get('X-Saga-Id') || '';",
+                  "  pm.collectionVariables.set('saga_enabled', sagaId ? 'true' : 'false');",
+                  "  pm.collectionVariables.set('saga_id', sagaId);",
+                  "  pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('saga_applicant_id', body.applicant_id);",
+                  "  pm.test('deception is never exposed to players', () => pm.expect(body).to.not.have.property('deception'));",
+                  "  // Without CREATE_APPLICANT_SAGA_ENABLED the plain Applicant answered: the saga checks are skipped.",
+                  "  (sagaId ? pm.test : pm.test.skip)('it ran as a saga: X-Saga-Id is a UUID', () =>",
+                  "    pm.expect(sagaId).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga - its credentials exist when the 201 arrives",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/credentials/{{saga_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "credentials",
+                "{{saga_applicant_id}}"
+              ]
+            },
+            "description": "Credential is the second step of the saga, so the documents exist before the 201. Without the saga they come later, from the applicant_initialized event, and nothing is checked."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const saga = pm.collectionVariables.get('saga_enabled') === 'true';",
+                  "(saga ? pm.test : pm.test.skip)('200 OK: the documents are there', () => pm.response.to.have.status(200));",
+                  "(saga ? pm.test : pm.test.skip)('for the same applicant', () =>",
+                  "  pm.expect(pm.response.json().applicant_id).to.eql(pm.collectionVariables.get('saga_applicant_id')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga - the same Idempotency-Key returns the same applicant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{saga_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "The same key and body name the same saga, which is finished: its stored outcome comes back and no second applicant is created.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const saga = pm.collectionVariables.get('saga_enabled') === 'true';",
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "(saga ? pm.test : pm.test.skip)('the same applicant, not a second one', () =>",
+                  "  pm.expect(pm.response.json().applicant_id).to.eql(pm.collectionVariables.get('saga_applicant_id')));",
+                  "(saga ? pm.test : pm.test.skip)('the same saga', () =>",
+                  "  pm.expect(pm.response.headers.get('X-Saga-Id')).to.eql(pm.collectionVariables.get('saga_id')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga - the same key with another body is refused",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{saga_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "The key already names a saga with another body. Without the saga the key is not read, and the shift that never started is refused.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{unstarted_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const saga = pm.collectionVariables.get('saga_enabled') === 'true';",
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test(saga ? 'IDEMPOTENCY_KEY_REUSED' : 'SESSION_NOT_ACTIVE', () =>",
+                  "  pm.expect(pm.response.json().error.code).to.eql(saga ? 'IDEMPOTENCY_KEY_REUSED' : 'SESSION_NOT_ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga - a shift that is not running is refused as before",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{saga_refused_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "The Applicant refuses the first step; the saga has nothing to undo and answers with the Applicant's own error, the same as without the saga.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{unstarted_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('saga_refused_key', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('SESSION_NOT_ACTIVE', () => pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_ACTIVE'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga - an unknown shift is refused as before",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{saga_refused_key}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "No shift has this id: the Applicant's 404 comes back unchanged.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{unknown_session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('saga_refused_key', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('SESSION_NOT_FOUND', () => pm.expect(pm.response.json().error.code).to.eql('SESSION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga - its state in the Message Broker",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{broker_url}}/sagas/{{saga_id}}",
+              "host": [
+                "{{broker_url}}"
+              ],
+              "path": [
+                "sagas",
+                "{{saga_id}}"
+              ]
+            },
+            "description": "Internal: straight to the Broker (port 8100 on the host), not through the Gateway. Shows the state of each step, never what it returned."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const saga = pm.collectionVariables.get('saga_enabled') === 'true';",
+                  "(saga ? pm.test : pm.test.skip)('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = saga ? pm.response.json() : {};",
+                  "(saga ? pm.test : pm.test.skip)('COMPLETED', () => pm.expect(body.state).to.eql('COMPLETED'));",
+                  "(saga ? pm.test : pm.test.skip)('Applicant, Credential, then University Record, all DONE', () => {",
+                  "  pm.expect(body.steps.map((step) => step.service))",
+                  "    .to.eql(['applicant-service', 'credential-service', 'university-record-service']);",
+                  "  body.steps.forEach((step) => pm.expect(step.state).to.eql('DONE'));",
+                  "});",
+                  "(saga ? pm.test : pm.test.skip)('no step result is shown', () =>",
+                  "  body.steps.forEach((step) => pm.expect(step).to.not.have.property('result')));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Lab 5 Grade 5 - database failover (MANUAL)",
+      "description": "Run the shift requests at the top of this collection first and keep the shift running. Send the first two requests. In a terminal check `bash infrastructure/replication/cluster.sh applicant status` (one PRIMARY, two streaming standbys, the same row counts), then use `bash infrastructure/replication/cluster.sh applicant failover applicant-db` ONLY if that is the current primary. Wait until `status` shows the new primary, then send the remaining requests. Rebuilding the old primary (`rejoin`) stays a terminal operation. A collection run without an actual promotion is only an API smoke check.",
+      "item": [
+        {
+          "name": "Failover - create an applicant and capture it before promotion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "Creates the data this folder checks, on the current primary. The shift from the first requests of this collection must still be running.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('lab5_failover_applicant_id', body.applicant_id);",
+                  "pm.test('an applicant_id is returned', () => pm.expect(body.applicant_id).to.be.a('string').and.not.be.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Failover - read the applicant before promotion",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/applicants/{{lab5_failover_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants",
+                "{{lab5_failover_applicant_id}}"
+              ]
+            },
+            "description": "The capture: the answer to compare after the promotion."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('lab5_failover_applicant', JSON.stringify(pm.response.json()));",
+                  "pm.test('deception is never exposed to players', () =>",
+                  "  pm.expect(pm.response.json()).to.not.have.property('deception'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Failover - read the same applicant after promotion",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/applicants/{{lab5_failover_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants",
+                "{{lab5_failover_applicant_id}}"
+              ]
+            },
+            "description": "Sent after the promotion: the standby that became primary must hold the same data."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the data survived the promotion', () => pm.expect(pm.response.json()).to.deep.eql(JSON.parse(pm.collectionVariables.get('lab5_failover_applicant'))));",
+                  "pm.test('deception is never exposed to players', () =>",
+                  "  pm.expect(pm.response.json()).to.not.have.property('deception'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Failover - create a new applicant after promotion",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/applicants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants"
+              ]
+            },
+            "description": "The new primary accepts writes: the service reconnected on its own, with no restart.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{session_id}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('a new applicant_id is returned', () => pm.expect(body.applicant_id).to.be.a('string').and.not.eql(pm.collectionVariables.get('lab5_failover_applicant_id')));",
+                  "pm.collectionVariables.set('lab5_failover_new_applicant_id', body.applicant_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Failover - read the new applicant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/applicants/{{lab5_failover_new_applicant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "applicants",
+                "{{lab5_failover_new_applicant_id}}"
+              ]
+            },
+            "description": "What was written after the promotion can be read back."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('deception is never exposed to players', () =>",
+                  "  pm.expect(pm.response.json()).to.not.have.property('deception'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "variable": [
@@ -744,6 +1299,38 @@
     {
       "key": "first_instance",
       "value": ""
+    },
+    {
+      "key": "broker_url",
+      "value": "http://localhost:8100"
+    },
+    {
+      "key": "saga_key",
+      "value": ""
+    },
+    {
+      "key": "saga_refused_key",
+      "value": ""
+    },
+    {
+      "key": "saga_attempts",
+      "value": "0"
+    },
+    {
+      "key": "saga_enabled",
+      "value": ""
+    },
+    {
+      "key": "saga_id",
+      "value": ""
+    },
+    {
+      "key": "saga_applicant_id",
+      "value": ""
+    },
+    {
+      "key": "round_robin_tries",
+      "value": "0"
     }
   ]
 }
